@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.*
+
+# Data & artifacts
+data/
+*.db
+*.db-wal
+*.db-shm
+*.npz
+*.joblib
+*.bin
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Test / coverage
+.coverage
+htmlcov/
+coverage.xml

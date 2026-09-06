@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  honeypot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.honeypot
+    container_name: mirage-honeypot
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - mirage-data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mirage-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: mirage-dashboard
+    restart: unless-stopped
+    ports:
+      - "8050:8050"
+    volumes:
+      - mirage-data:/app/data:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mirage-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  retrainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.honeypot
+    container_name: mirage-retrainer
+    restart: unless-stopped
+    command: python -m app.retrain.scheduler
+    volumes:
+      - mirage-data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mirage-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+
+volumes:
+  mirage-data:
+    driver: local
+
+networks:
+  mirage-internal:
+    driver: bridge
+    internal: true
+    enable_ipv6: false
