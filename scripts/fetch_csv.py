@@ -24,7 +24,7 @@ def fetch_csv(url: str, dest: Path) -> Path:
     if dest.suffix.lower() != ".csv":
         raise ValueError(f"Destination must end in .csv, got: {dest.suffix}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urlopen(url) as response, open(dest, "wb") as out:
+    with urlopen(url, timeout=30) as response, open(dest, "wb") as out:
         shutil.copyfileobj(response, out)
     logger.info(f"Downloaded {dest} ({dest.stat().st_size} bytes)")
     return dest
