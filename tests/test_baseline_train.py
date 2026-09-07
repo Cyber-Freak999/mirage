@@ -38,3 +38,46 @@ def test_create_validation_set_returns_train_and_val(tmp_path: Path, fake_data) 
 
     saved = np.load(tmp_path / "validation_set.npz")
     np.testing.assert_array_equal(saved["y"], y_val)
+
+
+def test_train_cli_missing_data_returns_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import app.model.train as train_mod
+
+    monkeypatch.setattr(
+        cc,
+        "load_combined_datasets",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("No datasets loaded")),
+    )
+    monkeypatch.setattr(cc, "VALIDATION_SET_PATH", tmp_path / "validation_set.npz")
+
+    result = train_mod.main(["--cicids-dir", str(tmp_path / "missing-cicids")])
+
+    assert result == 1
+
+
+def test_train_cli_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_data) -> None:
+    import app.model.train as train_mod
+    from app.model import ensemble as model_mod
+
+    monkeypatch.setattr(cc, "VALIDATION_DB", tmp_path / "validation.db")
+    monkeypatch.setattr(model_mod, "MODEL_DIR", tmp_path / "models")
+
+    result = train_mod.main(["--k-folds", "2"])
+
+    assert result == 0
+    assert (tmp_path / "models" / "champion.pkl").exists()
+    assert (tmp_path / "models" / "champion.json").exists()
+    assert (tmp_path / "validation_set.npz").exists()
+
+    import json
+
+    champion_meta = json.loads((tmp_path / "models" / "champion.json").read_text())
+    assert champion_meta["training_samples"] == 160
+    assert champion_meta["is_champion"] is True
+    assert champion_meta["validation_metrics"]["f1"] >= 0.0
+
+    conn = __import__("sqlite3").connect(str(tmp_path / "validation.db"))
+    row = conn.execute("SELECT champion_version, promoted FROM validations ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    assert row[0] == "none"
+    assert row[1] == 1

@@ -100,6 +100,26 @@ tests/           Unit tests
 - **CICIDS2017** — Sharafaldin, A. Habibi Lashkari, and A. A. Ghorbani, "Toward Generating a New Intrusion Detection Dataset and Intrusion Traffic Characterization," ICISSP 2018.
 - **UNSW-NB15** — Moustafa and Slay, "UNSW-NB15: A comprehensive data set for network intrusion detection systems," 2015. UNSW-NB15 is made available for **academic research**; commercial use is restricted.
 
+## Training the baseline model
+
+Download the public benchmark CSVs into `data/raw/cicids2017/` and `data/raw/unsw-nb15/` (CICIDS2017 and UNSW-NB15; see the sources above — CICIDS2017 is form-gated and large, UNSW-NB15 is directly downloadable). The `scripts/fetch_csv.py` helper can grab individual CSVs into the right layout:
+
+    uv run python scripts/fetch_csv.py --url <csv-url> --dest data/raw/unsw-nb15/part.csv
+
+Then train the baseline champion:
+
+    uv run python -m app.model.train
+
+Flags control per-source sampling (`--cicids-sample`, `--unsw-sample` — default 0.1/0.5 to bound runtime), stacking folds (`--k-folds`), and validation holdout (`--val-size`). The run:
+
+1. Loads + samples both datasets, mapping them to the unified 25-feature schema
+2. Holds out a stratified 20% validation set (persisted to `data/validation_set.npz`)
+3. Trains the stacking ensemble (RF + XGBoost + LR meta-learner) on the rest
+4. Runs champion/challenger validation on the held-out set (no champion exists yet, so the first run always promotes)
+5. On promotion, saves the versioned model and `champion.pkl` under `data/models/`
+
+Artifacts live under gitignored `data/`, so nothing gets committed.
+
 ## Legal & Ethics
 
 Mirage is a defensive honeypot for security research. It logs traffic (including source IPs) and uses captured data for model training. Public deployment should include a visible notice (e.g., `security.txt`) disclosing the honeypot's nature, log retention practices, and research-only usage. This project does not constitute legal advice; consult someone knowledgeable about local law (e.g., Nigeria's Cybercrimes Act 2015) before public deployment.

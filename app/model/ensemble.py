@@ -266,6 +266,8 @@ def save_model(ensemble: StackingEnsemble, version_id: str | None = None) -> Pat
     if version_id:
         ensemble.version.version_id = version_id
 
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
     model_path = MODEL_DIR / f"{ensemble.version.version_id}.pkl"
     meta_path = MODEL_DIR / f"{ensemble.version.version_id}.json"
 

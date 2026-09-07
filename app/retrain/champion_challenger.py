@@ -159,7 +159,7 @@ class ChampionChallenger:
                 champion = load_model("champion")
             except FileNotFoundError:
                 logger.info("No champion model exists. Promoting challenger as first model.")
-                return ValidationResult(
+                result = ValidationResult(
                     timestamp=time.time(),
                     challenger_version=challenger.version.version_id,
                     champion_version="none",
@@ -168,6 +168,8 @@ class ChampionChallenger:
                     promoted=True,
                     reason="First model - no champion to compare",
                 )
+                self._log_validation(result)
+                return result
 
         champion_metrics = evaluate_model(champion, X_val, y_val)
 
