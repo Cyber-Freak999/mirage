@@ -1,11 +1,11 @@
-"""Tests for public dataset loaders against real UNSW-NB15 file layouts."""
+"""Tests for public dataset loaders against real UNSW-NB15 and CICIDS2017 layouts."""
 
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from app.schema.datasets import load_unsw_nb15
+from app.schema.datasets import load_cicids2017, load_unsw_nb15
 
 CANONICAL_HEADERS = [
     "srcip",
@@ -195,3 +195,63 @@ def test_load_unsw_nb15_dir_with_only_junk_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="No valid UNSW-NB15"):
         load_unsw_nb15(tmp_path)
+
+
+CICIDS_HEADER = [
+    " Destination Port",
+    "Flow Duration",
+    " Total Fwd Packets",
+    " Total Backward Packets",
+    "Total Length of Fwd Packets",
+    " Total Length of Bwd Packets",
+    " Fwd Packet Length Mean",
+    "Flow Bytes/s",
+    " Flow Packets/s",
+    " Flow IAT Mean",
+    " Label",
+]
+
+
+def _cicids_row(i: int) -> str:
+    """Build a synthetic CICIDS2017 row; odd indices are attacks."""
+    benign = i % 2 == 0
+    label = "BENIGN" if benign else "DDoS"
+    return "80,1000,2,1,200,100,1,1000.0,10,5.0," + label
+
+
+def _write_cicids_csv(path: Path, n_rows: int, blank_numeric: bool = False) -> None:
+    rows = [_cicids_row(i) for i in range(n_rows)]
+    if blank_numeric:
+        rows[1] = rows[1].replace("1,1000.0,", ",1000.0,")
+    path.write_text(",".join(CICIDS_HEADER) + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_load_cicids2017_strips_header_whitespace(tmp_path: Path) -> None:
+    _write_cicids_csv(tmp_path / "Monday-WorkingHours.csv", 4)
+
+    X, y = load_cicids2017(tmp_path)
+
+    assert y.tolist() == [0, 1, 0, 1]
+    assert X.shape == (4, 25)
+
+
+def test_load_cicids2017_sampling(tmp_path: Path) -> None:
+    _write_cicids_csv(tmp_path / "Monday-WorkingHours.csv", 100)
+
+    X, y = load_cicids2017(tmp_path, sample_frac=0.5, random_state=42)
+
+    assert len(y) == 50
+
+
+def test_load_cicids2017_handles_blank_numeric(tmp_path: Path) -> None:
+    _write_cicids_csv(tmp_path / "Monday-WorkingHours.csv", 4, blank_numeric=True)
+
+    X, y = load_cicids2017(tmp_path)
+
+    assert X.shape == (4, 25)
+    assert y.tolist() == [0, 1, 0, 1]
+
+
+def test_load_cicids2017_empty_dir_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="No CICIDS2017 CSV"):
+        load_cicids2017(tmp_path)

@@ -1,6 +1,7 @@
 """Public dataset loaders mapped to unified 25-feature schema."""
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -197,6 +198,7 @@ UNSW_FLOW_HEADERS = [
 _HEADER_TOKENS = ("attack_cat", "Label", "label")
 
 UNSW_CHUNK_SIZE = 100_000
+CICIDS_CHUNK_SIZE = 100_000
 
 HTTP_DERIVED_FEATURES = {
     "method": "GET",
@@ -227,12 +229,24 @@ def _binary_labels(series: pd.Series, label_col: str) -> np.ndarray:
     return series.apply(lambda x: 0 if str(x).lower() == "normal" else 1).values
 
 
+def _cicids_labels(frame: pd.DataFrame) -> np.ndarray:
+    """Return binary labels for a CICIDS frame: 0 for BENIGN, 1 otherwise."""
+    return frame["Label"].apply(lambda x: 0 if "BENIGN" in str(x).upper() else 1).values
+
+
 def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
     """Load CICIDS2017 dataset and map to unified schema.
 
     Note: CICIDS2017 is network-flow based, not HTTP-request based.
     This function creates synthetic HTTP-like features from flow features
     as a best-effort mapping. For true HTTP features, use PCAP-based extraction.
+
+    The official ``*.pcap_ISCX.csv`` files carry a leading space on many
+    column names (e.g. `` Label``) and occasionally leave numeric cells
+    blank; names are stripped on load and blank numerics are coerced to zero.
+    Files are read in chunks of :data:`CICIDS_CHUNK_SIZE` rows and sampled
+    per chunk, so only ``sample_frac`` of the rows is ever materialized in
+    memory.
 
     Args:
         data_dir: Directory containing CICIDS2017 CSV files
@@ -242,45 +256,41 @@ def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int 
     Returns:
         Tuple of (features_array, labels_array)
     """
-    csv_files = list(data_dir.glob("*.csv"))
+    csv_files = sorted(data_dir.glob("*.csv"))
     if not csv_files:
-        raise FileNotFoundError(f"No CSV files found in {data_dir}")
+        raise FileNotFoundError(f"No CICIDS2017 CSV files found in {data_dir}")
 
-    dfs = []
+    rng = np.random.RandomState(random_state)
+    feature_parts, label_parts = [], []
     for csv_file in csv_files:
         try:
-            df = pd.read_csv(csv_file)
-            dfs.append(df)
-            logger.info(f"Loaded {csv_file.name}: {len(df)} rows")
+            file_features, file_labels = [], []
+            for chunk in pd.read_csv(csv_file, encoding="utf-8-sig", chunksize=CICIDS_CHUNK_SIZE):
+                chunk.columns = chunk.columns.str.strip()
+                if "Label" not in chunk.columns:
+                    break
+                sampled = _sample_chunk(chunk, sample_frac, rng).fillna(0)
+                if len(sampled):
+                    file_features.append(_extract_request_features(sampled, _cicids_row_to_http))
+                    file_labels.append(_cicids_labels(sampled))
+            if not file_features:
+                continue
+            features = np.concatenate(file_features)
+            labels = np.concatenate(file_labels)
         except Exception as e:
             logger.warning(f"Failed to load {csv_file}: {e}")
+            continue
+        feature_parts.append(features)
+        label_parts.append(labels)
+        logger.info(f"Loaded {csv_file.name}: {len(features)} sampled rows")
 
-    if not dfs:
-        raise ValueError("No valid CSV files loaded")
+    if not feature_parts:
+        raise ValueError("No valid CICIDS2017 CSV files loaded")
 
-    combined = pd.concat(dfs, ignore_index=True)
-
-    if sample_frac < 1.0:
-        combined = combined.sample(frac=sample_frac, random_state=random_state)
-
-    labels = combined["Label"].apply(lambda x: 0 if "BENIGN" in str(x).upper() else 1).values
-
-    features = np.zeros((len(combined), 25), dtype=np.float32)
-
-    for i, row in combined.iterrows():
-        synthetic_request = _cicids_row_to_http(row)
-        features[i] = extract_features(
-            method=synthetic_request["method"],
-            path=synthetic_request["path"],
-            query_string=synthetic_request["query"],
-            headers=synthetic_request["headers"],
-            body=synthetic_request["body"],
-        )
-
-    return features, labels
+    return np.concatenate(feature_parts), np.concatenate(label_parts)
 
 
-def _sample_unsw_chunk(frame: pd.DataFrame, sample_frac: float, rng: np.random.RandomState) -> pd.DataFrame:
+def _sample_chunk(frame: pd.DataFrame, sample_frac: float, rng: np.random.RandomState) -> pd.DataFrame:
     """Select an exact-size random draw from ``frame`` (paired with ``rng``)."""
     if sample_frac >= 1.0:
         return frame
@@ -288,7 +298,22 @@ def _sample_unsw_chunk(frame: pd.DataFrame, sample_frac: float, rng: np.random.R
     if n_keep <= 0:
         return frame.iloc[0:0]
     indices = rng.choice(len(frame), size=n_keep, replace=False)
-    return frame.iloc[indices]
+    return frame.iloc[indices].reset_index(drop=True)
+
+
+def _extract_request_features(frame: pd.DataFrame, row_to_http: Callable[[pd.Series], dict]) -> np.ndarray:
+    """Build the unified 25-feature matrix for every row in ``frame``."""
+    features = np.zeros((len(frame), 25), dtype=np.float32)
+    for i, row in frame.iterrows():
+        synthetic_request = row_to_http(row)
+        features[i] = extract_features(
+            method=synthetic_request["method"],
+            path=synthetic_request["path"],
+            query_string=synthetic_request["query"],
+            headers=synthetic_request["headers"],
+            body=synthetic_request["body"],
+        )
+    return features
 
 
 def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
@@ -304,8 +329,9 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
     bundled reference files (e.g. the ground-truth or features-listing CSVs)
     are skipped with a warning.
 
-    Files are read in chunks of :data:`UNSW_CHUNK_SIZE` rows and sampled per
-    chunk, so only ``sample_frac`` of the rows is ever materialized in memory.
+    Files are read in chunks of :data:`UNSW_CHUNK_SIZE` rows, sampled per
+    chunk, and converted to features immediately, so only ``sample_frac`` of
+    the rows is ever materialized in memory.
 
     Args:
         data_dir: Directory containing UNSW-NB15 CSV files
@@ -326,48 +352,38 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
         (headed_files if _is_unsw_header_line(first_line) else headless_files).append(csv_file)
 
     rng = np.random.RandomState(random_state)
-    frames = []
+    feature_parts, label_parts = [], []
     for csv_file in headless_files or headed_files:
         try:
             read_kwargs = {"encoding": "utf-8-sig", "chunksize": UNSW_CHUNK_SIZE}
             if headless_files:
                 read_kwargs.update(header=None, names=UNSW_FLOW_HEADERS)
-            file_frames, first_chunk = [], True
+            label_col, file_features, file_labels = None, [], []
             for chunk in pd.read_csv(csv_file, **read_kwargs):
-                if first_chunk:
-                    first_chunk = False
-                    if _unsw_label_column(chunk) is None:
+                if label_col is None:
+                    label_col = _unsw_label_column(chunk)
+                    if label_col is None:
                         logger.warning(f"Skipping {csv_file.name}: no UNSW label column")
                         break
-                file_frames.append(_sample_unsw_chunk(chunk, sample_frac, rng))
+                sampled = _sample_chunk(chunk, sample_frac, rng)
+                if len(sampled):
+                    file_features.append(_extract_request_features(sampled, _unsw_row_to_http))
+                    file_labels.append(_binary_labels(sampled[label_col], label_col))
+            if not file_features:
+                continue
+            features = np.concatenate(file_features)
+            labels = np.concatenate(file_labels)
         except Exception as e:
             logger.warning(f"Skipping {csv_file.name}: failed to parse ({e})")
             continue
-        sampled = sum(len(c) for c in file_frames)
-        frames.extend(filter(len, file_frames))
-        logger.info(f"Loaded {csv_file.name}: {sampled} sampled rows")
+        feature_parts.append(features)
+        label_parts.append(labels)
+        logger.info(f"Loaded {csv_file.name}: {len(features)} sampled rows")
 
-    if not frames:
+    if not feature_parts:
         raise ValueError("No valid UNSW-NB15 flow files loaded")
 
-    combined = pd.concat(frames, ignore_index=True)
-
-    label_col = _unsw_label_column(combined)
-    labels = _binary_labels(combined[label_col], label_col)
-
-    features = np.zeros((len(combined), 25), dtype=np.float32)
-
-    for i, row in combined.iterrows():
-        synthetic_request = _unsw_row_to_http(row)
-        features[i] = extract_features(
-            method=synthetic_request["method"],
-            path=synthetic_request["path"],
-            query_string=synthetic_request["query"],
-            headers=synthetic_request["headers"],
-            body=synthetic_request["body"],
-        )
-
-    return features, labels
+    return np.concatenate(feature_parts), np.concatenate(label_parts)
 
 
 def _cicids_row_to_http(row: pd.Series) -> dict:
