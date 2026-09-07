@@ -75,16 +75,37 @@ def create_validation_set(
     unsw_dir: Path | None = None,
     test_size: float = 0.2,
     random_state: int = 42,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Create and save a fixed held-out validation set."""
+    cicids_sample: float = 1.0,
+    unsw_sample: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Create and persist a fixed held-out validation set.
+
+    Splits combined public data into stratified train/validation portions,
+    persists the validation portion to ``VALIDATION_SET_PATH``, and returns
+    ``(X_train, y_train, X_val, y_val)`` so training can use the same
+    split without label leakage through the validation set.
+
+    Args:
+        cicids_dir: Directory containing CICIDS2017 CSV files.
+        unsw_dir: Directory containing UNSW-NB15 CSV files.
+        test_size: Fraction of data held out for validation.
+        random_state: Random seed for sampling and splitting.
+        cicids_sample: Fraction of CICIDS2017 rows to load.
+        unsw_sample: Fraction of UNSW-NB15 rows to load.
+
+    Returns:
+        Tuple of (X_train, y_train, X_val, y_val).
+    """
     from sklearn.model_selection import train_test_split
 
-    X, y = load_combined_datasets(cicids_dir, unsw_dir, random_state=random_state)
-    _, X_val, _, y_val = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y)
+    X, y = load_combined_datasets(cicids_dir, unsw_dir, cicids_sample, unsw_sample, random_state)
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y)
 
     np.savez(VALIDATION_SET_PATH, X=X_val, y=y_val)
-    logger.info(f"Created validation set: {len(X_val)} samples ({y_val.sum()} attacks)")
-    return X_val, y_val
+    logger.info(
+        f"Created validation set: {len(X_val)} samples ({y_val.sum()} attacks); " f"{len(X_train)} samples for training"
+    )
+    return X_train, y_train, X_val, y_val
 
 
 def load_validation_set() -> tuple[np.ndarray, np.ndarray]:
