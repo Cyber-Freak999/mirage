@@ -142,6 +142,60 @@ UNSW_FEATURE_MAP = {
     "Label": "label_binary",
 }
 
+UNSW_FLOW_HEADERS = [
+    "srcip",
+    "sport",
+    "dstip",
+    "dsport",
+    "proto",
+    "state",
+    "dur",
+    "sbytes",
+    "dbytes",
+    "sttl",
+    "dttl",
+    "sloss",
+    "dloss",
+    "service",
+    "Sload",
+    "Dload",
+    "Spkts",
+    "Dpkts",
+    "swin",
+    "dwin",
+    "stcpb",
+    "dtcpb",
+    "smeansz",
+    "dmeansz",
+    "trans_depth",
+    "res_bdy_len",
+    "Sjit",
+    "Djit",
+    "Stime",
+    "Ltime",
+    "Sintpkt",
+    "Dintpkt",
+    "tcprtt",
+    "synack",
+    "ackdat",
+    "is_sm_ips_ports",
+    "ct_state_ttl",
+    "ct_flw_http_mthd",
+    "is_ftp_login",
+    "ct_ftp_cmd",
+    "ct_srv_src",
+    "ct_srv_dst",
+    "ct_dst_ltm",
+    "ct_src_ltm",
+    "ct_src_dport_ltm",
+    "ct_dst_sport_ltm",
+    "ct_dst_src_ltm",
+    "attack_cat",
+    "Label",
+]
+
+_HEADER_TOKENS = ("attack_cat", "Label", "label")
+
 HTTP_DERIVED_FEATURES = {
     "method": "GET",
     "path": "/",
@@ -149,6 +203,26 @@ HTTP_DERIVED_FEATURES = {
     "headers": {},
     "body": "",
 }
+
+
+def _is_unsw_header_line(line: str) -> bool:
+    """Return whether ``line`` looks like a header row (vs. headless flow data)."""
+    return any(token in line for token in _HEADER_TOKENS)
+
+
+def _unsw_label_column(frame: pd.DataFrame) -> str | None:
+    """Return the preferred label column with values in ``frame``, or None."""
+    for candidate in ("Label", "attack_cat"):
+        if candidate in frame.columns and frame[candidate].notna().any():
+            return candidate
+    return None
+
+
+def _binary_labels(series: pd.Series, label_col: str) -> np.ndarray:
+    """Convert an UNSW label series to binary 0/1 attack labels."""
+    if label_col == "Label":
+        return series.astype(int).values
+    return series.apply(lambda x: 0 if str(x).lower() == "normal" else 1).values
 
 
 def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
@@ -210,6 +284,13 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
     Note: UNSW-NB15 has some HTTP-specific features but is primarily flow-based.
     This creates synthetic HTTP features from available fields.
 
+    The official ``UNSW-NB15_*.csv`` flow files ship without a header row and
+    with a UTF-8 BOM; they are read with explicit column names. Files that
+    carry a header row (the ``UNSW_NB15_training-set.csv`` / ``testing-set.csv``
+    layout) are only used when no headless flow files are present. Other
+    bundled reference files (e.g. the ground-truth or features-listing CSVs)
+    are skipped with a warning.
+
     Args:
         data_dir: Directory containing UNSW-NB15 CSV files
         sample_frac: Fraction of data to sample
@@ -218,33 +299,44 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
     Returns:
         Tuple of (features_array, labels_array)
     """
-    csv_files = list(data_dir.glob("*.csv"))
+    csv_files = sorted(data_dir.glob("*.csv"))
     if not csv_files:
-        raise FileNotFoundError(f"No CSV files found in {data_dir}")
+        raise FileNotFoundError(f"No UNSW-NB15 CSV files found in {data_dir}")
 
-    dfs = []
+    headless_files, headed_files = [], []
     for csv_file in csv_files:
+        with open(csv_file, encoding="utf-8-sig", errors="replace") as fh:
+            first_line = next((line.rstrip("\n") for line in fh if line.strip()), "")
+        (headed_files if _is_unsw_header_line(first_line) else headless_files).append(csv_file)
+
+    frames = []
+    for csv_file in headless_files or headed_files:
         try:
-            df = pd.read_csv(csv_file)
-            dfs.append(df)
-            logger.info(f"Loaded {csv_file.name}: {len(df)} rows")
+            if headless_files:
+                frame = pd.read_csv(csv_file, header=None, names=UNSW_FLOW_HEADERS, encoding="utf-8-sig")
+            else:
+                frame = pd.read_csv(csv_file, encoding="utf-8-sig")
         except Exception as e:
-            logger.warning(f"Failed to load {csv_file}: {e}")
+            logger.warning(f"Skipping {csv_file.name}: failed to parse ({e})")
+            continue
 
-    if not dfs:
-        raise ValueError("No valid CSV files loaded")
+        if _unsw_label_column(frame) is None:
+            logger.warning(f"Skipping {csv_file.name}: no UNSW label column")
+            continue
 
-    combined = pd.concat(dfs, ignore_index=True)
+        frames.append(frame)
+        logger.info(f"Loaded {csv_file.name}: {len(frame)} rows")
+
+    if not frames:
+        raise ValueError("No valid UNSW-NB15 flow files loaded")
+
+    combined = pd.concat(frames, ignore_index=True)
 
     if sample_frac < 1.0:
-        combined = combined.sample(frac=sample_frac, random_state=random_state)
+        combined = combined.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
 
-    if "Label" in combined.columns:
-        labels = combined["Label"].values
-    elif "attack_cat" in combined.columns:
-        labels = combined["attack_cat"].apply(lambda x: 0 if str(x).lower() == "normal" else 1).values
-    else:
-        raise ValueError("No label column found in UNSW-NB15 data")
+    label_col = _unsw_label_column(combined)
+    labels = _binary_labels(combined[label_col], label_col)
 
     features = np.zeros((len(combined), 25), dtype=np.float32)
 
