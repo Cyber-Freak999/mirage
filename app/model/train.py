@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     """Load public data, train the stacking ensemble, and persist the champion model."""
     args = build_parser().parse_args(argv)
 
+    if not args.cicids_dir.exists():
+        logger.warning(f"Directory {args.cicids_dir} not found - skipping CICIDS2017")
     cicids_dir = args.cicids_dir if args.cicids_dir.exists() else None
     unsw_dir = args.unsw_dir if args.unsw_dir.exists() else None
 

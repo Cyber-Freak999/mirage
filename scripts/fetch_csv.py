@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         fetch_csv(args.url, args.dest)
         return 0
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         logger.error(f"Download failed: {exc}")
         return 1
 
