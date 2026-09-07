@@ -196,6 +196,8 @@ UNSW_FLOW_HEADERS = [
 
 _HEADER_TOKENS = ("attack_cat", "Label", "label")
 
+UNSW_CHUNK_SIZE = 100_000
+
 HTTP_DERIVED_FEATURES = {
     "method": "GET",
     "path": "/",
@@ -278,6 +280,17 @@ def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int 
     return features, labels
 
 
+def _sample_unsw_chunk(frame: pd.DataFrame, sample_frac: float, rng: np.random.RandomState) -> pd.DataFrame:
+    """Select an exact-size random draw from ``frame`` (paired with ``rng``)."""
+    if sample_frac >= 1.0:
+        return frame
+    n_keep = int(round(len(frame) * sample_frac))
+    if n_keep <= 0:
+        return frame.iloc[0:0]
+    indices = rng.choice(len(frame), size=n_keep, replace=False)
+    return frame.iloc[indices]
+
+
 def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
     """Load UNSW-NB15 dataset and map to unified schema.
 
@@ -290,6 +303,9 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
     layout) are only used when no headless flow files are present. Other
     bundled reference files (e.g. the ground-truth or features-listing CSVs)
     are skipped with a warning.
+
+    Files are read in chunks of :data:`UNSW_CHUNK_SIZE` rows and sampled per
+    chunk, so only ``sample_frac`` of the rows is ever materialized in memory.
 
     Args:
         data_dir: Directory containing UNSW-NB15 CSV files
@@ -309,31 +325,32 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
             first_line = next((line.rstrip("\n") for line in fh if line.strip()), "")
         (headed_files if _is_unsw_header_line(first_line) else headless_files).append(csv_file)
 
+    rng = np.random.RandomState(random_state)
     frames = []
     for csv_file in headless_files or headed_files:
         try:
+            read_kwargs = {"encoding": "utf-8-sig", "chunksize": UNSW_CHUNK_SIZE}
             if headless_files:
-                frame = pd.read_csv(csv_file, header=None, names=UNSW_FLOW_HEADERS, encoding="utf-8-sig")
-            else:
-                frame = pd.read_csv(csv_file, encoding="utf-8-sig")
+                read_kwargs.update(header=None, names=UNSW_FLOW_HEADERS)
+            file_frames, first_chunk = [], True
+            for chunk in pd.read_csv(csv_file, **read_kwargs):
+                if first_chunk:
+                    first_chunk = False
+                    if _unsw_label_column(chunk) is None:
+                        logger.warning(f"Skipping {csv_file.name}: no UNSW label column")
+                        break
+                file_frames.append(_sample_unsw_chunk(chunk, sample_frac, rng))
         except Exception as e:
             logger.warning(f"Skipping {csv_file.name}: failed to parse ({e})")
             continue
-
-        if _unsw_label_column(frame) is None:
-            logger.warning(f"Skipping {csv_file.name}: no UNSW label column")
-            continue
-
-        frames.append(frame)
-        logger.info(f"Loaded {csv_file.name}: {len(frame)} rows")
+        sampled = sum(len(c) for c in file_frames)
+        frames.extend(filter(len, file_frames))
+        logger.info(f"Loaded {csv_file.name}: {sampled} sampled rows")
 
     if not frames:
         raise ValueError("No valid UNSW-NB15 flow files loaded")
 
     combined = pd.concat(frames, ignore_index=True)
-
-    if sample_frac < 1.0:
-        combined = combined.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
 
     label_col = _unsw_label_column(combined)
     labels = _binary_labels(combined[label_col], label_col)
