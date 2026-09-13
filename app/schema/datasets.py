@@ -269,7 +269,7 @@ def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int 
                 chunk.columns = chunk.columns.str.strip()
                 if "Label" not in chunk.columns:
                     break
-                sampled = _sample_chunk(chunk, sample_frac, rng).fillna(0)
+                sampled = _sample_chunk(chunk, sample_frac, rng).replace([np.inf, -np.inf], np.nan).fillna(0)
                 if len(sampled):
                     file_features.append(_extract_request_features(sampled, _cicids_row_to_http))
                     file_labels.append(_cicids_labels(sampled))

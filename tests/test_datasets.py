@@ -226,6 +226,26 @@ def _write_cicids_csv(path: Path, n_rows: int, blank_numeric: bool = False) -> N
     path.write_text(",".join(CICIDS_HEADER) + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
 
 
+def _cicids_row_with_inf(i: int) -> str:
+    """Build a synthetic CICIDS2017 row with an ``inf`` Flow Packets/s cell."""
+    label = "BENIGN" if i % 2 == 0 else "DDoS"
+    return "80,1000,2,1,200,100,1,1000.0,inf,5.0," + label
+
+
+def test_load_cicids2017_coerces_inf_to_zero(tmp_path: Path) -> None:
+    rows = [_cicids_row_with_inf(i) for i in range(4)]
+    (tmp_path / "Monday-WorkingHours.csv").write_text(
+        ",".join(CICIDS_HEADER) + "\n" + "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+
+    X, y = load_cicids2017(tmp_path)
+
+    assert X.shape == (4, 25)
+    assert np.isfinite(X).all()
+    assert y.tolist() == [0, 1, 0, 1]
+
+
 def test_load_cicids2017_strips_header_whitespace(tmp_path: Path) -> None:
     _write_cicids_csv(tmp_path / "Monday-WorkingHours.csv", 4)
 
