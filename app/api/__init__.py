@@ -74,7 +74,7 @@ def score():
     try:
         features = extract_features(method, path, query_string, headers, body)
         score = float(model.predict_proba(features.reshape(1, -1))[0])
-        prediction = int(score >= 0.5)
+        prediction = int(score >= model.decision_threshold)
 
         rf_score, xgb_score = model.get_base_predictions(features.reshape(1, -1))
 
@@ -123,7 +123,7 @@ def batch_score():
         try:
             features = extract_features(method, path, query_string, headers, body)
             score = float(model.predict_proba(features.reshape(1, -1))[0])
-            prediction = int(score >= 0.5)
+            prediction = int(score >= model.decision_threshold)
 
             results.append(
                 {

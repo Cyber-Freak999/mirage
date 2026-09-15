@@ -70,6 +70,7 @@ class ModelVersion:
     training_metrics: dict[str, float] = field(default_factory=dict)
     validation_metrics: dict[str, float] = field(default_factory=dict)
     feature_importance: dict[str, float] = field(default_factory=dict)
+    decision_threshold: float = 0.5
     is_champion: bool = False
 
     def to_dict(self) -> dict:
@@ -85,6 +86,7 @@ class ModelVersion:
             "training_metrics": self.training_metrics,
             "validation_metrics": self.validation_metrics,
             "feature_importance": self.feature_importance,
+            "decision_threshold": self.decision_threshold,
             "is_champion": self.is_champion,
         }
 
@@ -209,6 +211,11 @@ class StackingEnsemble:
         )
         return self
 
+    @property
+    def decision_threshold(self) -> float:
+        """Deployment decision threshold (defaults to 0.5 until calibrated)."""
+        return self.version.decision_threshold if self.version else 0.5
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Get attack probability predictions."""
         if not self.rf_fitted or not self.xgb_fitted or not self.meta_fitted:
@@ -219,9 +226,10 @@ class StackingEnsemble:
         meta_input = np.column_stack([rf_proba, xgb_proba])
         return self.meta.predict_proba(meta_input)[:, 1]
 
-    def predict(self, X: np.ndarray, threshold: float = 0.5) -> np.ndarray:
-        """Get binary predictions."""
-        return (self.predict_proba(X) >= threshold).astype(int)
+    def predict(self, X: np.ndarray, threshold: float | None = None) -> np.ndarray:
+        """Get binary predictions at the model's (or an explicit) threshold."""
+        effective = self.decision_threshold if threshold is None else threshold
+        return (self.predict_proba(X) >= effective).astype(int)
 
     def get_base_predictions(self, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Get individual base learner predictions for debugging/analysis."""

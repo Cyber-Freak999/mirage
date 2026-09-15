@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
+from ..model.calibration import select_threshold
 from ..model.ensemble import StackingEnsemble, load_model, save_model
 from ..schema.datasets import load_combined_datasets
 
@@ -118,9 +119,10 @@ def load_validation_set() -> tuple[np.ndarray, np.ndarray]:
 
 
 def evaluate_model(model: StackingEnsemble, X: np.ndarray, y: np.ndarray) -> dict[str, float]:
-    """Evaluate model on validation set."""
+    """Evaluate model on validation set at its deployment threshold."""
     y_pred_proba = model.predict_proba(X)
-    y_pred = (y_pred_proba >= 0.5).astype(int)
+    threshold = getattr(model, "decision_threshold", 0.5)
+    y_pred = (y_pred_proba >= threshold).astype(int)
 
     precision, recall, f1, _ = precision_recall_fscore_support(y, y_pred, average="binary", zero_division=0)
     auc = roc_auc_score(y, y_pred_proba)
@@ -145,12 +147,30 @@ class ChampionChallenger:
         champion: StackingEnsemble | None = None,
         X_val: np.ndarray | None = None,
         y_val: np.ndarray | None = None,
+        calibrate: bool = True,
     ) -> ValidationResult:
-        """Validate challenger against champion on held-out set."""
+        """Validate challenger against champion on held-out set.
+
+        Args:
+            challenger: Candidate model.
+            champion: Reigning model; loaded from disk when ``None``.
+            X_val: Held-out features; loaded from the persisted set when ``None``.
+            y_val: Held-out labels; loaded from the persisted set when ``None``.
+            calibrate: When true, tune the challenger's decision threshold on the
+                held-out set before evaluating, so the gate compares models at
+                their deployment thresholds.
+
+        Returns:
+            The validation result including the promotion decision.
+        """
         if X_val is None or y_val is None:
             X_val, y_val = load_validation_set()
 
         logger.info(f"Validating challenger {challenger.version.version_id} on {len(X_val)} samples")
+
+        if calibrate:
+            challenger.version.decision_threshold = select_threshold(y_val, challenger.predict_proba(X_val))
+            logger.info(f"Calibrated challenger decision_threshold={challenger.version.decision_threshold:.2f}")
 
         challenger_metrics = evaluate_model(challenger, X_val, y_val)
         challenger.version.validation_metrics = dict(challenger_metrics)
