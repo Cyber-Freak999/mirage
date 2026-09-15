@@ -1,9 +1,9 @@
 # Combined Baseline Report
 
-**Date:** 2026-09-15
+**Date:** 2026-09-15 (honesty audit appended same day)
 **Model:** stacking ensemble (RF + XGBoost + LR meta-learner), k-fold cross-validated
 **Run:** `python -m app.model.train` — CICIDS2017 sample 0.1, UNSW-NB15 sample 0.5, k-folds 5, val-size 0.2, random_state 42
-**Source commit (loader fix):** `4850502`
+**Source commit (loader fix):** `4850502` · **Honesty audit commit:** see git log (`phase-a/model-honesty`)
 
 ## Environment
 
@@ -26,12 +26,17 @@
 
 ## Validation (held-out 20%, via champion/challenger gate)
 
-| Metric | Value |
+> **Correction (honesty audit):** the original version of this table quoted fit-time
+> self-scored metrics (the `fit()` bug fixed in this phase). The numbers below are the
+> true held-out values from the champion/challenger gate (`validation.db` row 3),
+> evaluated at the then-default 0.5 threshold.
+
+| Metric | Value @ t=0.5 |
 |---|---|
-| Precision | 0.4013 |
-| Recall | 0.9465 |
-| F1 | 0.5637 |
-| AUC | 0.9240 |
+| Precision | 0.4015 |
+| Recall | 0.9441 |
+| F1 | 0.5633 |
+| AUC | 0.9233 |
 
 Challenger `v1789430774` vs prior champion `v1789324008`: **promoted** (`Challenger beats champion: F1 0.5633 > 0.5633` — exact tie at display precision; the gate promotes on `>=`). Champion lineage: placeholder `v1788810565` (10K smoke slice, F1 0.5536) → `v1789324008` (2026-09-13 run) → `v1789430774` (this run). The two real-data runs are byte-identical deterministic twins (same seed, same data), confirming `random_state=42` reproducibility. The placeholder `v1788810565` artifacts remain archived in `data/models/`.
 
@@ -56,5 +61,56 @@ Note: precision/recall asymmetry reflects `scale_pos_weight=6.76` (class imbalan
 ## API verification
 
 - `GET /api/health` → `{"status":"healthy","model_version":"v1789430774"}`
-- `POST /api/score` (SQLi payload `pass=1 OR 1=1`) → HTTP 200, `"label":"attack"`, score 0.761, `model_version":"v1789430774"`
-- `GET /api/model/info` → `"version":"v1789430774"`, `training_samples: 1187060`
+- `POST /api/score` (SQLi payload `pass=1 OR 1=1`) → HTTP 200, score 0.761, `model_version":"v1789430774"`. Label was `"attack"` at the pre-audit 0.5 threshold; at the calibrated 0.80 threshold it reads `"benign"` (0.76 < 0.80) — see the honesty audit below.
+- `GET /api/model/info` → `"version":"v1789430774"`, `training_samples: 1187060`, held-out `validation_metrics` (post-fix, now truthful)
+
+## Model honesty audit (2026-09-15, phase A)
+
+Three studies (`scripts/evaluate.py`) + threshold calibration, run against the champion `v1789430774` and fresh models trained on the same loaders.
+
+### 1. Threshold calibration (champion, held-out set)
+
+The 0.5 decision threshold was hardcoded; the champion is now calibrated to the F1-optimal **0.80** (stored in `champion.json`, consumed by `evaluate_model`, `predict`, and both API score endpoints):
+
+| Threshold | Precision | Recall | F1 |
+|---|---|---|---|
+| 0.50 (old default) | 0.4015 | 0.9441 | 0.5633 |
+| **0.80 (deployed, F1-optimal)** | **0.5313** | 0.8043 | **0.6399** |
+| 0.90 (precision floor ≥ 0.6) | 0.8826 | 0.1506 | 0.2572 |
+
+The score distribution has a sharp cliff between 0.85 and 0.90 (the `precision_floor` objective only reaches P ≥ 0.6 by sacrificing 85% of recall). A recall-biased deployment can lower the threshold — the mechanism now exists; the tradeoff is explicit above.
+
+### 2. Temporal-split study (train Mon/Tue → eval Thu/Fri, CICIDS-only, 0.1 sample)
+
+| | Rows | Attacks |
+|---|---|---|
+| Train (Mon+Tue) | 97,583 | 1,406 (1.4%) |
+| Eval (Thu+Fri) | 116,221 | 29,170 (25.1%) |
+
+**AUC 0.644** (vs 0.923 on the random split); F1 0.44 at 0.5, 0.50 at the calibrated 0.10. The random-split validation set was leaking same-period information: trained on two early days, the model barely generalizes to the attack types of later days. Feature importance also inverts — `method_get` collapses from 0.42 to 0.06 and path/param features dominate.
+
+### 3. Cross-dataset study (train one dataset, eval the other)
+
+| Direction | AUC | F1 @0.5 | Calibrated F1 |
+|---|---|---|---|
+| CICIDS → UNSW | **0.180** (anti-correlated) | 0.0001 | 0.2303 |
+| UNSW → CICIDS | **0.491** (random) | 0.1901 | 0.2401 |
+
+The synthetic-HTTP mapping learns **dataset-specific artifacts, not transferable attack semantics**: the two dataset mappers fabricate HTTP methods with opposite biases (UNSW-trained model puts 51% importance on `method_get` and treats GET as the attack signal; the CICIDS mapping leans the other way), so each model is useless — or anti-useful — on the other dataset.
+
+### 4. Feature-ablation study (method_* zeroed, combined 0.1/0.5, same 80/20 split)
+
+Zeroing `method_get`, `method_post`, `method_other` in both train and eval:
+
+| Model | AUC | F1 @0.5 | Top feature |
+|---|---|---|---|
+| Champion (all features) | 0.9233 | 0.5633 | method_get (0.42) |
+| **method_* zeroed** | **0.7961** | 0.4119 | **user_agent_entropy (0.61)** |
+
+`method_*` carries roughly a third of the ranking quality — and the moment it is removed, `user_agent_entropy` (another fabricated mapping artifact) absorbs 61% of importance, confirming the ensemble latches onto synthetic-mapping artifacts in a chain rather than attack semantics.
+
+### Findings
+
+1. **The 0.92 AUC headline overstates the model.** Honest estimates: ~0.64 across time, ~0.18-0.49 across datasets. The random-split number measures memorization of dataset artifacts, including our own `method ~ bytes>1000` fabrication.
+2. **Recall-heavy 0.5 default was hiding a 60% false-alarm rate**; deployed threshold is now 0.80 with an explicit tradeoff table.
+3. **Real-payload scoring stays weak** (SQLi probe scores 0.76; borderline at the new threshold) — consistent with the mapping-artifact finding. Fixing this means better feature grounding (Tier 2 capture fidelity work), not more training data.
