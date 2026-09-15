@@ -1,6 +1,6 @@
 # BACKLOG: Mirage
 
-**Version:** 3.0 | **Last Updated:** 2026-09-15
+**Version:** 3.1 | **Last Updated:** 2026-09-15
 **Source:** product-spec.md, README.md, AGENTS.md, docs/superpowers/plans/2026-09-06-train-baseline-model.md, docs/superpowers/plans/2026-09-13-combined-baseline-training.md, full-stack code audit 2026-09-15 (`app/model/ensemble.py`, `app/retrain/*`, `app/schema/*`, `app/api/`, `app/honeypot/`, `dashboard/app.py`, `docker-compose.yml`, Dockerfiles, on-disk DB state)
 
 Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/monitor-only.
@@ -33,11 +33,11 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 
 > Audit context: `method_get`/`method_post` carry 75% of feature importance, but the dataset mappers *fabricate* `method = "POST" if total_bytes > 1000 else "GET"` (`_cicids_row_to_http`/`_unsw_row_to_http`, `app/schema/datasets.py:389-453`) — the top features are artifacts of our own synthetic mapping, not attack semantics. `ModelVersion.validation_metrics` are computed on the training set itself (`app/model/ensemble.py:180-203`), and the 0.5 decision threshold is hardcoded in four places.
 
-7. `[ ]` **Truthful validation metrics.** `app` | `must` — `fit()` stores training-set metrics as `validation_metrics` (`ensemble.py:180-203`); compute them on held-out data or rename to `training_metrics`. Champion/challenger and `/api/model/info` must not report self-scored numbers.
-8. `[ ]` **Threshold calibration.** `app` | `must` — 0.5 hardcoded in `fit()` (`ensemble.py:181`), `evaluate_model()` (`champion_challenger.py:123`), `/api/score` and `/api/batch_score` (`api/__init__.py:77,126`). Make one tunable constant; tune on the validation set; add a precision-recall curve to `docs/baseline-report.md`. At 0.5, precision 0.40 means ~60% of alerts are false.
-9. `[ ]` **Temporal-split evaluation.** `app`/`tests` | `must` — CICIDS2017 files are per-day (Monday-WorkingHours ... Friday-*); the current val set is a random stratified split of the same collection period. Train Mon/Tue -> test Thu/Fri for an honest generalization estimate.
-10. `[ ]` **Cross-dataset evaluation.** `app` | `should` — train CICIDS -> eval UNSW (and reverse) to measure whether the synthetic-HTTP mapping learned anything transferable vs dataset-specific artifacts.
-11. `[ ]` **Shortcut-learning audit.** `app`/`docs` | `must` — document the `method ~ bytes>1000` artifact; run feature ablation (drop `method_*`, retrain, compare F1/AUC); record honest findings in `docs/baseline-report.md`. Absorbs old #13 (weak real-request scoring: SQLi 0.49 / RCE 0.11 via API).
+7. `[x]` **Truthful validation metrics.** `app` | `must` — `fit()` now stores `training_metrics`; `ChampionChallenger.validate()` writes held-out `validation_metrics` into model metadata (both promotion paths save via the gate). Old JSONs still load via defaults. Commit `2a54742`.
+8. `[x]` **Threshold calibration.** `app` | `must` — single-source `decision_threshold` persisted in `ModelVersion`, consumed by `evaluate_model`, `predict`, both API score endpoints; `app/model/calibration.py` (`select_threshold`, `precision_recall_table`); gate calibrates challengers before comparing. Champion calibrated to 0.80 (F1 0.6399 vs 0.5633 at 0.5). Commits `f9d5969`.
+9. `[x]` **Temporal-split evaluation.** `app`/`tests` | `must` — `scripts/evaluate.py --mode temporal`: train Mon/Tue → eval Thu/Fri gives AUC 0.644 vs 0.923 random split (same-period leakage quantified). Commit `51c382b`.
+10. `[x]` **Cross-dataset evaluation.** `app` | `should` — `--mode cross`: CICIDS→UNSW AUC 0.180 (anti-correlated), UNSW→CICIDS 0.491 (random); the synthetic-HTTP mapping learns dataset-specific artifacts, not transferable semantics.
+11. `[x]` **Shortcut-learning audit.** `app`/`docs` | `must` — `--mode zero-features`: AUC 0.923→0.796 without `method_*`, with `user_agent_entropy` (next artifact) absorbing 61% importance. Findings + PR table + calibrated threshold recorded in `docs/baseline-report.md`. Commit `6b1784a`.
 
 ### Tier 2 -- Adaptive loop (Phase B)
 
