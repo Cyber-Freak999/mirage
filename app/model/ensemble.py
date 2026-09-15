@@ -67,7 +67,8 @@ class ModelVersion:
     meta_params: dict
     training_samples: int
     class_distribution: dict[int, int]
-    validation_metrics: dict[str, float]
+    training_metrics: dict[str, float] = field(default_factory=dict)
+    validation_metrics: dict[str, float] = field(default_factory=dict)
     feature_importance: dict[str, float] = field(default_factory=dict)
     is_champion: bool = False
 
@@ -81,6 +82,7 @@ class ModelVersion:
             "meta_params": self.meta_params,
             "training_samples": self.training_samples,
             "class_distribution": self.class_distribution,
+            "training_metrics": self.training_metrics,
             "validation_metrics": self.validation_metrics,
             "feature_importance": self.feature_importance,
             "is_champion": self.is_champion,
@@ -192,7 +194,7 @@ class StackingEnsemble:
             meta_params=self.meta_params,
             training_samples=len(X),
             class_distribution=class_dist,
-            validation_metrics={
+            training_metrics={
                 "precision": float(precision),
                 "recall": float(recall),
                 "f1": float(f1),
@@ -203,7 +205,7 @@ class StackingEnsemble:
         )
 
         logger.info(
-            "Training complete. Validation metrics: " f"P={precision:.4f}, R={recall:.4f}, F1={f1:.4f}, AUC={auc:.4f}"
+            "Training complete. Training-set metrics: " f"P={precision:.4f}, R={recall:.4f}, F1={f1:.4f}, AUC={auc:.4f}"
         )
         return self
 

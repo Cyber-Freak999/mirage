@@ -153,6 +153,7 @@ class ChampionChallenger:
         logger.info(f"Validating challenger {challenger.version.version_id} on {len(X_val)} samples")
 
         challenger_metrics = evaluate_model(challenger, X_val, y_val)
+        challenger.version.validation_metrics = dict(challenger_metrics)
 
         if champion is None:
             try:
@@ -169,6 +170,7 @@ class ChampionChallenger:
                     reason="First model - no champion to compare",
                 )
                 self._log_validation(result)
+                save_model(challenger)
                 return result
 
         champion_metrics = evaluate_model(champion, X_val, y_val)
