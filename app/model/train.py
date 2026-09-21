@@ -67,6 +67,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if result.promoted:
         save_model(ensemble)
+        try:
+            from ..retrain.drift import DriftMonitor
+            from ..schema.features import FEATURE_NAMES
+
+            DriftMonitor(top_k_features=8).set_reference(X_train, FEATURE_NAMES, ensemble.version.feature_importance)
+            logger.info("Persisted drift reference from training data")
+        except Exception:
+            logger.exception("Failed to persist drift reference")
 
     v = result.challenger_metrics
     logger.info(

@@ -60,14 +60,16 @@ class RetrainingScheduler:
         self._load_drift_reference()
 
     def _load_drift_reference(self):
-        """Load drift reference from champion model."""
+        """Load drift reference from disk, falling back to champion metadata."""
+        if self.drift_monitor.load_reference():
+            return
         try:
             champion = load_model("champion")
             if champion.version and champion.version.feature_importance:
-                self.drift_monitor.set_reference(
-                    np.zeros((1, 25)),  # placeholder
-                    list(champion.version.feature_importance.keys()),
-                    champion.version.feature_importance,
+                logger.warning(
+                    "No persisted drift reference found; drift checks will fail until a "
+                    "training run persists one. Champion importance keys noted but no "
+                    "training matrix is available at runtime, so no placeholder is set."
                 )
         except FileNotFoundError:
             logger.warning("No champion model found for drift reference")
