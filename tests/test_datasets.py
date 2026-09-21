@@ -3,9 +3,15 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from app.schema.datasets import load_cicids2017, load_unsw_nb15
+from app.schema.datasets import (
+    _cicids_frame_to_features,
+    _unsw_frame_to_features,
+    load_cicids2017,
+    load_unsw_nb15,
+)
 
 CANONICAL_HEADERS = [
     "srcip",
@@ -275,3 +281,172 @@ def test_load_cicids2017_handles_blank_numeric(tmp_path: Path) -> None:
 def test_load_cicids2017_empty_dir_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="No CICIDS2017 CSV"):
         load_cicids2017(tmp_path)
+
+
+def test_cicids_row_to_features_shape_and_finite(tmp_path: Path) -> None:
+    """Direct CICIDS mapper -> (N, 25), finite, method features zero."""
+    frame = pd.DataFrame(
+        [
+            {
+                "Flow Duration": 1000,
+                "Total Fwd Packets": 2,
+                "Total Length of Fwd Packets": 200,
+                "Total Length of Bwd Packets": 100,
+                "Fwd Packet Length Mean": 1,
+                "Flow Bytes/s": 1000.0,
+                "Flow Packets/s": 10,
+                "Fwd IAT Std": 50.0,
+                "Bwd IAT Std": 30.0,
+                "Fwd PSH Flags": 1,
+                "Max Packet Length": 1500,
+                "Avg Fwd Segment Size": 100,
+                "ACK Flag Count": 1,
+                "SYN Flag Count": 0,
+                "FIN Flag Count": 1,
+            }
+        ]
+    )
+
+    X = _cicids_frame_to_features(frame)
+
+    assert X.shape == (1, 25)
+    assert np.isfinite(X).all()
+    # method features (0,1,2) should be 0.0
+    assert (X[:, 0:3] == 0.0).all()
+
+
+def test_load_cicids2017_method_features_zero(tmp_path: Path) -> None:
+    """Loaded CICIDS features carry zero method columns (no synthetic HTTP)."""
+    rows = [
+        "80,1000,2,1,200,100,1,1000.0,10,5.0,BENIGN",
+        "80,1000,2,1,200,100,1,1000.0,10,5.0,DDoS",
+        "80,1000,2,1,200,100,1,1000.0,10,5.0,BENIGN",
+        "80,1000,2,1,200,100,1,1000.0,10,5.0,DDoS",
+    ]
+    CICIDS_HEADER = [
+        " Destination Port",
+        "Flow Duration",
+        " Total Fwd Packets",
+        " Total Backward Packets",
+        "Total Length of Fwd Packets",
+        " Total Length of Bwd Packets",
+        " Fwd Packet Length Mean",
+        "Flow Bytes/s",
+        " Flow Packets/s",
+        " Flow IAT Mean",
+        " Label",
+    ]
+    (tmp_path / "test.csv").write_text(
+        ",".join(CICIDS_HEADER) + "\n" + "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+    X, y = load_cicids2017(tmp_path)
+
+    assert X.shape == (4, 25)
+    assert np.isfinite(X).all()
+    # method features (0,1,2) should be 0.0
+    assert (X[:, 0:3] == 0.0).all()
+
+
+def test_unsw_row_to_features_shape_and_finite() -> None:
+    """Direct UNSW mapper -> (N, 25), finite, method features zero."""
+    frame = pd.DataFrame(
+        [
+            {
+                "proto": "tcp",
+                "dur": "0.5",
+                "sbytes": "1000",
+                "dbytes": "2000",
+                "sloss": "0",
+                "service": "http",
+                "Sload": "8000.0",
+                "trans_depth": "1",
+                "res_bdy_len": "1000",
+                "Sjit": "0.01",
+                "Djit": "0.02",
+                "tcprtt": "0.3",
+                "ct_state_ttl": "1",
+                "ct_flw_http_mthd": "1",
+            }
+        ]
+    )
+
+    X = _unsw_frame_to_features(frame)
+
+    assert X.shape == (1, 25)
+    assert np.isfinite(X).all()
+    # method features (0,1,2) should be 0.0
+    assert (X[:, 0:3] == 0.0).all()
+
+
+def test_load_unsw_nb15_method_features_zero(tmp_path: Path) -> None:
+    """Loaded UNSW features carry zero method columns (no synthetic HTTP)."""
+    rows = [
+        "10.0.0.1,443,10.0.0.2,80,tcp,FIN,0.5,1000,2000,64,63,0,0,http,8000.0,16000.0,3,4,0,0,0,0,333,500,1,1000,0.01,0.02,1623,1623,0.1,0.2,0.3,0.1,0.2,0,1,1,1,0,2,3,4,1,2,3,Exploits,1",
+    ]
+    (tmp_path / "test.csv").write_text(
+        "\ufeff"
+        + ",".join(
+            [
+                "srcip",
+                "sport",
+                "dstip",
+                "dsport",
+                "proto",
+                "state",
+                "dur",
+                "sbytes",
+                "dbytes",
+                "sttl",
+                "dttl",
+                "sloss",
+                "dloss",
+                "service",
+                "Sload",
+                "Dload",
+                "Spkts",
+                "Dpkts",
+                "swin",
+                "dwin",
+                "stcpb",
+                "dtcpb",
+                "smeansz",
+                "dmeansz",
+                "trans_depth",
+                "res_bdy_len",
+                "Sjit",
+                "Djit",
+                "Stime",
+                "Ltime",
+                "Sintpkt",
+                "Dintpkt",
+                "tcprtt",
+                "synack",
+                "ackdat",
+                "is_sm_ips_ports",
+                "ct_state_ttl",
+                "ct_flw_http_mthd",
+                "is_ftp_login",
+                "ct_ftp_cmd",
+                "ct_srv_src",
+                "ct_srv_dst",
+                "ct_dst_ltm",
+                "ct_src_ltm",
+                "ct_src_dport_ltm",
+                "ct_dst_sport_ltm",
+                "ct_dst_src_ltm",
+                "attack_cat",
+                "Label",
+            ]
+        )
+        + "\n"
+        + "\n".join(rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    X, y = load_unsw_nb15(tmp_path)
+
+    assert X.shape == (1, 25)
+    assert np.isfinite(X).all()
+    # method features (0,1,2) should be 0.0
+    assert (X[:, 0:3] == 0.0).all()

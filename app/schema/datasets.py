@@ -1,4 +1,11 @@
-"""Public dataset loaders mapped to unified 25-feature schema."""
+"""Public dataset loaders mapped to unified 25-feature schema.
+
+Flow-to-feature mappers replace the synthetic HTTP request fabrication
+(forming method from arbitrary flow thresholds) with direct mappings from
+network-flow columns to the 25-feature schema.  Public-dataset method
+features are constant 0.0 — there is no true HTTP method in flow data.
+Honeypot data continues to use real HTTP extraction via ``extract_features``.
+"""
 
 import logging
 from collections.abc import Callable
@@ -271,7 +278,8 @@ def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int 
                     break
                 sampled = _sample_chunk(chunk, sample_frac, rng).replace([np.inf, -np.inf], np.nan).fillna(0)
                 if len(sampled):
-                    file_features.append(_extract_request_features(sampled, _cicids_row_to_http))
+                    # Direct flow-to-feature mapping; method features are 0.0.
+                    file_features.append(_cicids_frame_to_features(sampled))
                     file_labels.append(_cicids_labels(sampled))
             if not file_features:
                 continue
@@ -367,7 +375,8 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
                         break
                 sampled = _sample_chunk(chunk, sample_frac, rng)
                 if len(sampled):
-                    file_features.append(_extract_request_features(sampled, _unsw_row_to_http))
+                    # Direct flow-to-feature mapping; method features are 0.0.
+                    file_features.append(_unsw_frame_to_features(sampled))
                     file_labels.append(_binary_labels(sampled[label_col], label_col))
             if not file_features:
                 continue
@@ -451,6 +460,217 @@ def _unsw_row_to_http(row: pd.Series) -> dict:
         "headers": headers,
         "body": body,
     }
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    """Safely coerce a flow cell to float, falling back to ``default``."""
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if result != result or result in (float("inf"), float("-inf")):  # NaN / inf guard
+        return default
+    return result
+
+
+def _row_get(row: pd.Series, *names: str, default: object = 0) -> object:
+    """Return the first present column value from ``names``, else ``default``.
+
+    UNSW-NB15 ships two layouts (headless flow files with ``Spkts``/``Sload``
+    casing and headed train/test files with ``spkts``/``sload`` casing), so
+    mappers accept both variants.
+    """
+    for name in names:
+        if name in row:
+            return row.get(name, default)
+    return default
+
+
+def _cicids_frame_to_features(frame: pd.DataFrame) -> np.ndarray:
+    """Build the unified 25-feature matrix for every row in ``frame``."""
+    features = np.zeros((len(frame), 25), dtype=np.float32)
+    for i, (_, row) in enumerate(frame.iterrows()):
+        features[i] = _cicids_row_to_features(row)
+    return features
+
+
+def _unsw_frame_to_features(frame: pd.DataFrame) -> np.ndarray:
+    """Build the unified 25-feature matrix for every row in ``frame``."""
+    features = np.zeros((len(frame), 25), dtype=np.float32)
+    for i, (_, row) in enumerate(frame.iterrows()):
+        features[i] = _unsw_row_to_features(row)
+    return features
+
+
+def _cicids_row_to_features(row: pd.Series) -> np.ndarray:
+    """Map a CICIDS2017 flow row directly to the unified 25-feature vector.
+
+    Method features (indices 0, 1, 2) are always 0.0 because CICIDS is
+    flow-based, not HTTP-request based — there is no true HTTP method.
+    """
+    import math
+
+    features = np.zeros(25, dtype=np.float32)
+
+    # ---- 0-2: HTTP method (constant 0.0 for flow data) ----
+    # features[0] = method_get  -> already 0.0
+    # features[1] = method_post -> already 0.0
+    # features[2] = method_other-> already 0.0
+
+    # ---- 3: path_depth ----
+    # Bucket Fwd Packet Length Mean into 1-5 segments
+    fwd_pkt_len_mean = _to_float(row.get("Fwd Packet Length Mean", 1), 1.0)
+    features[3] = min(max(int(fwd_pkt_len_mean) % 5 + 1, 1), 5)
+
+    # ---- 4: path_length ----
+    # Total Length of Fwd Packets, log-scaled
+    total_fwd = _to_float(row.get("Total Length of Fwd Packets", 0))
+    features[4] = math.log1p(total_fwd) if total_fwd > 0 else 0.0
+
+    # ---- 5: has_query ----
+    # Proxy: 1.0 if Flow Packets/s suggests a request with params
+    flow_pkt_s = _to_float(row.get("Flow Packets/s", 1), 1.0)
+    features[5] = 1.0 if flow_pkt_s > 10 else 0.0
+
+    # ---- 6: query_length ----
+    # Flow Packets/s, log-scaled
+    features[6] = math.log1p(flow_pkt_s) if flow_pkt_s > 0 else 0.0
+
+    # ---- 7: param_count ----
+    # Total Fwd Packets, capped at 20
+    total_fwd_pkts = _to_float(row.get("Total Fwd Packets", 1), 1.0)
+    features[7] = min(total_fwd_pkts, 20.0)
+
+    # ---- 8: param_name_entropy ----
+    # Fwd IAT Std normalized (clamped)
+    fwd_iat_std = _to_float(row.get("Fwd IAT Std", 0))
+    features[8] = min(fwd_iat_std / 1000.0, 10.0)
+
+    # ---- 9: param_value_entropy ----
+    # Bwd IAT Std normalized (clamped)
+    bwd_iat_std = _to_float(row.get("Bwd IAT Std", 0))
+    features[9] = min(bwd_iat_std / 1000.0, 10.0)
+
+    # ---- 10: payload_length ----
+    # Total Length of Bwd Packets
+    total_bwd = _to_float(row.get("Total Length of Bwd Packets", 0))
+    features[10] = total_bwd
+
+    # ---- 11: special_char_density ----
+    # Proxy: Fwd PSH Flags / Total Fwd Packets (flag density)
+    fwd_psh = _to_float(row.get("Fwd PSH Flags", 0))
+    total_fwd_pkts_count = _to_float(row.get("Total Fwd Packets", 1), 1.0)
+    features[11] = fwd_psh / total_fwd_pkts_count if total_fwd_pkts_count > 0 else 0.0
+
+    # ---- 12-15: attack keyword counts (0.0 for flow data) ----
+    # Already zeros from np.zeros initialization
+
+    # ---- 17: digit_ratio ----
+    # Flow Bytes/s normalized digit-like density proxy
+    flow_bytes_s = _to_float(row.get("Flow Bytes/s", 0))
+    # Approximate: count digits in Flow Bytes/s string representation
+    # Simplified: just use the value scaled
+    features[17] = min(flow_bytes_s / 1e7, 1.0) if flow_bytes_s > 0 else 0.0
+
+    # ---- 19: longest_param_len ----
+    # Max Packet Length
+    max_pkt_len = _to_float(row.get("Max Packet Length", 0))
+    features[19] = max_pkt_len
+
+    # ---- 20: avg_param_len ----
+    # Average Packet Size
+    avg_pkt_size = _to_float(row.get("Avg Fwd Segment Size", row.get("Average Packet Size", 0)))
+    features[20] = avg_pkt_size if avg_pkt_size > 0 else 0.0
+
+    # ---- 23: header_count ----
+    # TCP flag count: ACK + SYN + FIN
+    ack = _to_float(row.get("ACK Flag Count", 0))
+    syn = _to_float(row.get("SYN Flag Count", 0))
+    fin = _to_float(row.get("FIN Flag Count", 0))
+    features[23] = ack + syn + fin
+
+    return features
+
+
+def _unsw_row_to_features(row: pd.Series) -> np.ndarray:
+    """Map a UNSW-NB15 flow row directly to the unified 25-feature vector.
+
+    Method features (indices 0, 1, 2) are always 0.0 because UNSW is
+    flow-based, not HTTP-request based — there is no true HTTP method.
+    """
+    import math
+
+    features = np.zeros(25, dtype=np.float32)
+
+    # ---- 0-2: HTTP method (constant 0.0 for flow data) ----
+    # Already 0.0 from np.zeros
+
+    # ---- 3: path_depth ----
+    # trans_depth directly maps
+    trans_depth = _to_float(_row_get(row, "trans_depth", default=1), 1.0)
+    features[3] = max(1.0, trans_depth)
+
+    # ---- 4: path_length ----
+    # sbytes + dbytes, log-scaled
+    sbytes = _to_float(_row_get(row, "sbytes", default=0))
+    dbytes = _to_float(_row_get(row, "dbytes", default=0))
+    features[4] = math.log1p(sbytes + dbytes) if (sbytes + dbytes) > 0 else 0.0
+
+    # ---- 5: has_query ----
+    # 1.0 if res_bdy_len > 0 suggests HTTP body / query present
+    res_bdy_len = _to_float(_row_get(row, "res_bdy_len", "response_body_len", default=0))
+    features[5] = 1.0 if res_bdy_len > 0 else 0.0
+
+    # ---- 6: query_length ----
+    # res_bdy_len
+    features[6] = float(res_bdy_len) if res_bdy_len > 0 else 0.0
+
+    # ---- 7: param_count ----
+    # ct_flw_http_mthd: count of HTTP method identifiers in flow
+    ct_flw = _to_float(_row_get(row, "ct_flw_http_mthd", default=0))
+    features[7] = ct_flw if ct_flw > 0 else 0.0
+
+    # ---- 8: param_name_entropy ----
+    # Sjit (source jitter) normalized
+    sjit = _to_float(_row_get(row, "Sjit", "sjit", default=0))
+    features[8] = min(sjit / 100.0, 10.0)
+
+    # ---- 9: param_value_entropy ----
+    # Djit (dest jitter) normalized
+    djit = _to_float(_row_get(row, "Djit", "djit", default=0))
+    features[9] = min(djit / 100.0, 10.0)
+
+    # ---- 10: payload_length ----
+    # sbytes (source bytes)
+    features[10] = sbytes if sbytes > 0 else 0.0
+
+    # ---- 11: special_char_density ----
+    # sloss / (sbytes + 1) — loss ratio proxy
+    sloss = _to_float(_row_get(row, "sloss", default=0))
+    sbytes_val = _to_float(_row_get(row, "sbytes", default=0))
+    features[11] = sloss / (sbytes_val + 1) if sbytes_val >= 0 else 0.0
+
+    # ---- 17: digit_ratio ----
+    # Sload normalized
+    sload = _to_float(_row_get(row, "Sload", "sload", default=0))
+    features[17] = min(sload / 1000.0, 1.0) if sload > 0 else 0.0
+
+    # ---- 19: longest_param_len ----
+    # tcprtt (round-trip time as length proxy)
+    tcprtt = _to_float(_row_get(row, "tcprtt", default=0))
+    features[19] = tcprtt if tcprtt > 0 else 0.0
+
+    # ---- 20: avg_param_len ----
+    # dur (duration)
+    dur = _to_float(_row_get(row, "dur", default=0))
+    features[20] = dur if dur > 0 else 0.0
+
+    # ---- 23: header_count ----
+    # ct_state_ttl — connection state count
+    ct_ttl = _to_float(_row_get(row, "ct_state_ttl", default=0))
+    features[23] = ct_ttl if ct_ttl > 0 else 0.0
+
+    return features
 
 
 def load_combined_datasets(
