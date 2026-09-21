@@ -277,12 +277,24 @@ def run_full_retrain(
     cicids_dir: Path | None = None,
     unsw_dir: Path | None = None,
     k_folds: int = 5,
+    cicids_sample: float = 1.0,
+    unsw_sample: float = 1.0,
 ) -> tuple[StackingEnsemble, ValidationResult]:
-    """Run full retraining pipeline: train challenger, validate, promote if better."""
+    """Run full retraining pipeline: train challenger, validate, promote if better.
+
+    Args:
+        X_new: New honeypot feature matrix (attack-only, label 1).
+        y_new: Labels for the new data.
+        cicids_dir: Directory containing CICIDS2017 CSV files.
+        unsw_dir: Directory containing UNSW-NB15 CSV files.
+        k_folds: Stacking folds for the challenger.
+        cicids_sample: Fraction of CICIDS2017 rows to load (cap for small hosts).
+        unsw_sample: Fraction of UNSW-NB15 rows to load (cap for small hosts).
+    """
     from ..model.ensemble import train_initial_model
 
     if cicids_dir and cicids_dir.exists() or unsw_dir and unsw_dir.exists():
-        X_public, y_public = load_combined_datasets(cicids_dir, unsw_dir)
+        X_public, y_public = load_combined_datasets(cicids_dir, unsw_dir, cicids_sample, unsw_sample)
         X_combined = np.vstack([X_public, X_new])
         y_combined = np.concatenate([y_public, y_new])
     else:

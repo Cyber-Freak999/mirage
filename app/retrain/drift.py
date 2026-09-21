@@ -101,6 +101,7 @@ class DriftResult:
     max_psi: float
     triggered: bool
     tracked_features: list[str]
+    id: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -127,16 +128,29 @@ class DriftMonitor:
         init_drift_db()
 
     def set_reference(self, X: np.ndarray, feature_names: list[str], importance: dict[str, float]):
-        """Set reference distributions from training data."""
+        """Set reference distributions from training data.
+
+        Columns are resolved by feature name (via ``feature_names``, which must
+        list the schema names in column order), not by importance rank position.
+
+        Args:
+            X: Training feature matrix with columns in ``feature_names`` order.
+            feature_names: Schema feature name per column of ``X``.
+            importance: Feature-name → importance score mapping.
+        """
         self.tracked_features = sorted(importance.keys(), key=lambda f: importance.get(f, 0), reverse=True)[
             : self.top_k_features
         ]
 
         logger.info(f"Tracking drift on top {len(self.tracked_features)} features: {self.tracked_features}")
 
-        for i, feat in enumerate(self.tracked_features):
-            if i < X.shape[1]:
-                self.reference_distributions[feat] = X[:, i].copy()
+        col_index = {name: idx for idx, name in enumerate(feature_names)}
+        for feat in self.tracked_features:
+            idx = col_index.get(feat)
+            if idx is not None and idx < X.shape[1]:
+                self.reference_distributions[feat] = X[:, idx].copy()
+            else:
+                logger.warning(f"No column for tracked feature {feat!r}; skipping")
 
         self._save_reference(feature_names)
 
@@ -174,8 +188,15 @@ class DriftMonitor:
         logger.info(f"Loaded reference for {len(self.tracked_features)} features")
         return True
 
-    def check_drift(self, X: np.ndarray) -> DriftResult:
-        """Check for drift in current batch against reference."""
+    def check_drift(self, X: np.ndarray, feature_names: list[str] | None = None) -> DriftResult:
+        """Check for drift in current batch against reference.
+
+        Args:
+            X: Current batch feature matrix.
+            feature_names: Optional schema names in column order; when given,
+                tracked features resolve by name, otherwise positionally
+                (backward compatible).
+        """
         if not self.tracked_features or not self.reference_distributions:
             if not self.load_reference():
                 raise RuntimeError("No reference distributions available. Train model first.")
@@ -190,14 +211,22 @@ class DriftMonitor:
                 tracked_features=self.tracked_features,
             )
 
+        col_index = {name: idx for idx, name in enumerate(feature_names)} if feature_names else {}
         psi_scores = {}
         for i, feat in enumerate(self.tracked_features):
-            if i >= X.shape[1] or feat not in self.reference_distributions:
-                psi_scores[feat] = 0.0
-                continue
+            if feature_names is not None:
+                idx = col_index.get(feat)
+                if idx is None or idx >= X.shape[1] or feat not in self.reference_distributions:
+                    psi_scores[feat] = 0.0
+                    continue
+                cur = X[:, idx]
+            else:
+                if i >= X.shape[1] or feat not in self.reference_distributions:
+                    psi_scores[feat] = 0.0
+                    continue
+                cur = X[:, i]
 
             ref = self.reference_distributions[feat]
-            cur = X[:, i]
             psi_scores[feat] = compute_psi(ref, cur)
 
         max_psi = max(psi_scores.values()) if psi_scores else 0.0
@@ -212,7 +241,7 @@ class DriftMonitor:
             tracked_features=self.tracked_features,
         )
 
-        self._log_drift_check(result)
+        result.id = self._log_drift_check(result)
 
         if triggered:
             logger.warning(f"DRIFT DETECTED: max PSI = {max_psi:.4f} (threshold: {self.psi_threshold})")
@@ -222,11 +251,15 @@ class DriftMonitor:
 
         return result
 
-    def _log_drift_check(self, result: DriftResult):
-        """Log drift check result to database."""
+    def _log_drift_check(self, result: DriftResult) -> int:
+        """Log drift check result to database.
+
+        Returns:
+            The inserted row id, for linking review entries.
+        """
         conn = sqlite3.connect(str(DRIFT_DB))
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO drift_checks (timestamp, sample_size, psi_scores, max_psi, triggered, tracked_features)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -240,8 +273,10 @@ class DriftMonitor:
                 json.dumps(result.tracked_features),
             ),
         )
+        row_id = cursor.lastrowid
         conn.commit()
         conn.close()
+        return row_id
 
     def get_drift_history(self, limit: int = 100) -> list[DriftResult]:
         """Get recent drift check history."""

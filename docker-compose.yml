@@ -64,7 +64,7 @@ services:
       dockerfile: Dockerfile.honeypot
     container_name: mirage-retrainer
     restart: unless-stopped
-    command: python -m app.retrain.scheduler
+    command: python -m app.retrain.scheduler_entry
     volumes:
       - mirage-data:/app/data
     environment:

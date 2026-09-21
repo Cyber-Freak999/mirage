@@ -1,6 +1,5 @@
 """APScheduler-based retraining scheduler with persistent job store."""
 
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -37,6 +36,8 @@ class RetrainingConfig:
     k_folds: int = 5
     cicids_dir: Path | None = None
     unsw_dir: Path | None = None
+    cicids_sample: float = 0.05
+    unsw_sample: float = 0.25
 
 
 class RetrainingScheduler:
@@ -60,14 +61,16 @@ class RetrainingScheduler:
         self._load_drift_reference()
 
     def _load_drift_reference(self):
-        """Load drift reference from champion model."""
+        """Load drift reference from disk, falling back to champion metadata."""
+        if self.drift_monitor.load_reference():
+            return
         try:
             champion = load_model("champion")
             if champion.version and champion.version.feature_importance:
-                self.drift_monitor.set_reference(
-                    np.zeros((1, 25)),  # placeholder
-                    list(champion.version.feature_importance.keys()),
-                    champion.version.feature_importance,
+                logger.warning(
+                    "No persisted drift reference found; drift checks will fail until a "
+                    "training run persists one. Champion importance keys noted but no "
+                    "training matrix is available at runtime, so no placeholder is set."
                 )
         except FileNotFoundError:
             logger.warning("No champion model found for drift reference")
@@ -137,6 +140,7 @@ class RetrainingScheduler:
         conn.close()
 
         if not new_rows:
+            self.sweep_reviews()
             return None
 
         self._samples_since_check += len(new_rows)
@@ -165,7 +169,7 @@ class RetrainingScheduler:
             }
 
             review = self.review_gate.create_review(
-                drift_result_id=0,
+                drift_result_id=drift_result.id or 0,
                 max_psi=drift_result.max_psi,
                 psi_scores=drift_result.psi_scores,
                 sample_size=drift_result.sample_size,
@@ -175,29 +179,34 @@ class RetrainingScheduler:
             logger.warning(f"Drift triggered review {review.id}. Waiting for approval or timeout.")
 
         self._samples_since_check = 0
+        self.sweep_reviews()
         return drift_result
 
     def _rows_to_features(self, rows) -> np.ndarray:
         """Convert database rows to feature vectors."""
-        from ..schema.features import extract_features
+        from ..schema.capture import rows_to_features
 
-        features = []
-        for row in rows:
-            try:
-                raw_request = json.loads(row["raw_request"]) if row["raw_request"] else {}
-            except (json.JSONDecodeError, TypeError):
-                raw_request = {}
+        return rows_to_features(rows)
 
-            feat = extract_features(
-                method=row["method"],
-                path=row["path"],
-                query_string=row["query_string"] or "",
-                headers={"user-agent": row["user_agent"] or ""},
-                body=raw_request.get("body", "") if isinstance(raw_request, dict) else "",
-            )
-            features.append(feat)
+    def sweep_reviews(self) -> list[int]:
+        """Process reviews ready to proceed (approved or auto-proceeded).
 
-        return np.array(features)
+        Called on every scheduled tick so manual decisions (API/dashboard)
+        take effect within one interval and timed-out reviews auto-proceed
+        per the 72-hour policy. Manual decisions apply on the next sweep.
+
+        Returns:
+            IDs of reviews for which retraining ran.
+        """
+        processed = []
+        for review in self.review_gate.get_actionable_reviews():
+            if not self.review_gate.should_proceed(review.id):
+                continue
+            logger.info(f"Sweep: retraining for review {review.id} (status auto-proceeded or approved)")
+            self.process_review(review.id, approved=True, reviewer="system-sweep")
+            self.review_gate.mark_done(review.id)
+            processed.append(review.id)
+        return processed
 
     def process_review(self, review_id: int, approved: bool, reviewer: str = "system") -> ValidationResult | None:
         """Process a review decision and run retraining if approved."""
@@ -231,6 +240,8 @@ class RetrainingScheduler:
             cicids_dir=self.config.cicids_dir,
             unsw_dir=self.config.unsw_dir,
             k_folds=self.config.k_folds,
+            cicids_sample=self.config.cicids_sample,
+            unsw_sample=self.config.unsw_sample,
         )
 
         if result.promoted:

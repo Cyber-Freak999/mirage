@@ -164,6 +164,36 @@ def model_info():
     )
 
 
+@bp.route("/reviews/<int:review_id>/approve", methods=["POST"])
+def review_approve(review_id: int):
+    """Approve a drift review, queueing it for retraining on the next sweep."""
+    # TODO(Tier3): require API key auth.
+    from ..retrain.review_gate import ReviewGate
+
+    data = request.get_json(silent=True) or {}
+    gate = ReviewGate()
+    if gate.get_review(review_id) is None:
+        return jsonify({"error": f"Review {review_id} not found"}), 404
+    if not gate.approve(review_id, data.get("reviewer", "api"), data.get("notes", "")):
+        return jsonify({"error": f"Review {review_id} is already decided"}), 409
+    return jsonify({"status": "approved", "review_id": review_id})
+
+
+@bp.route("/reviews/<int:review_id>/reject", methods=["POST"])
+def review_reject(review_id: int):
+    """Reject a drift review, skipping retraining for that batch."""
+    # TODO(Tier3): require API key auth.
+    from ..retrain.review_gate import ReviewGate
+
+    data = request.get_json(silent=True) or {}
+    gate = ReviewGate()
+    if gate.get_review(review_id) is None:
+        return jsonify({"error": f"Review {review_id} not found"}), 404
+    if not gate.reject(review_id, data.get("reviewer", "api"), data.get("notes", "")):
+        return jsonify({"error": f"Review {review_id} is already decided"}), 409
+    return jsonify({"status": "rejected", "review_id": review_id})
+
+
 @bp.route("/model/reload", methods=["POST"])
 def reload():
     """Reload the champion model (e.g., after retraining)."""

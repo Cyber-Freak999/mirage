@@ -1,42 +1,20 @@
 """SQLi-style honeypot entry points."""
 
-import sqlite3
-import time
-
 from flask import Blueprint, jsonify, request
 
-from . import DB_PATH
+from . import capture_context, log_request
 
 bp = Blueprint("sqlii", __name__)
-
-
-def _log_request(source_ip, method, path, query_string, user_agent, raw_request, attack_type):
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        INSERT INTO requests
-        (timestamp, source_ip, method, path, query_string,
-         user_agent, raw_request, attack_type, decoy_indicator)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (time.time(), source_ip, method, path, query_string, user_agent, raw_request, attack_type, 0),
-    )
-    conn.commit()
-    conn.close()
 
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     """Simulated login form — classic SQLi target."""
     source_ip = request.remote_addr or "unknown"
-    method = request.method
-    path = request.full_path or request.path
-    query_string = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
-    user_agent = request.headers.get("User-Agent", "")
-    raw_request = request.get_data(as_text=True)
+    ctx = capture_context()
+    method = ctx["method"]
 
-    _log_request(source_ip, method, path, query_string, user_agent, raw_request, "sqli")
+    log_request(source_ip, ctx, "sqli")
 
     if method == "POST":
         data = request.form
@@ -65,13 +43,10 @@ def login():
 def search():
     """Simulated search/filter page — another SQLi entry point."""
     source_ip = request.remote_addr or "unknown"
-    method = request.method
-    path = request.full_path or request.path
-    query_string = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
-    user_agent = request.headers.get("User-Agent", "")
-    raw_request = request.get_data(as_text=True)
+    ctx = capture_context()
+    method = ctx["method"]
 
-    _log_request(source_ip, method, path, query_string, user_agent, raw_request, "sqli")
+    log_request(source_ip, ctx, "sqli")
 
     if method == "POST":
         data = request.form

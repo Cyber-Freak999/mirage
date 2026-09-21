@@ -1,11 +1,15 @@
 """Honeypot endpoints — SQLi-style and RCE/upload-style entry points."""
 
+import json
 import sqlite3
+import time
 from pathlib import Path
 
 from flask import Flask
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "honeypot.db"
+
+MAX_HEADERS_BYTES = 4096
 
 
 def init_db():
@@ -24,12 +28,24 @@ def init_db():
             user_agent TEXT,
             raw_request TEXT,
             attack_type TEXT NOT NULL DEFAULT 'unknown',
-            decoy_indicator INTEGER NOT NULL DEFAULT 0
+            decoy_indicator INTEGER NOT NULL DEFAULT 0,
+            headers_json TEXT,
+            content_type TEXT
         )
         """
     )
+    _migrate(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate(conn: sqlite3.Connection):
+    """Add capture-fidelity columns to pre-migration databases."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
+    if "headers_json" not in columns:
+        conn.execute("ALTER TABLE requests ADD COLUMN headers_json TEXT")
+    if "content_type" not in columns:
+        conn.execute("ALTER TABLE requests ADD COLUMN content_type TEXT")
 
 
 def register_blueprints(app: Flask):
@@ -40,4 +56,60 @@ def register_blueprints(app: Flask):
     app.register_blueprint(rce.bp)
 
 
-__all__ = ["init_db", "register_blueprints"]
+def capture_context() -> dict[str, str]:
+    """Extract structured capture fields from the active Flask request.
+
+    Uses ``request.path`` (no query string — that lives in ``query_string``)
+    and preserves the full header set plus content type for faithful
+    feature extraction downstream.
+
+    Returns:
+        Dict with method/path/query_string/user_agent/raw_request/
+        headers_json/content_type keys.
+    """
+    from flask import request as flask_request
+
+    return {
+        "method": flask_request.method,
+        "path": flask_request.path,
+        "query_string": flask_request.query_string.decode("utf-8", errors="replace")
+        if flask_request.query_string
+        else "",
+        "user_agent": flask_request.headers.get("User-Agent", ""),
+        "raw_request": flask_request.get_data(as_text=True),
+        "headers_json": json.dumps(dict(flask_request.headers))[:MAX_HEADERS_BYTES],
+        "content_type": flask_request.content_type or "",
+    }
+
+
+def log_request(source_ip: str, capture: dict[str, str], attack_type: str):
+    """Persist one honeypot capture with structured fields."""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        INSERT INTO requests
+        (timestamp, source_ip, method, path, query_string,
+         user_agent, raw_request, attack_type, decoy_indicator,
+         headers_json, content_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            time.time(),
+            source_ip,
+            capture["method"],
+            capture["path"],
+            capture["query_string"],
+            capture["user_agent"],
+            capture["raw_request"],
+            attack_type,
+            0,
+            capture["headers_json"],
+            capture["content_type"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+__all__ = ["init_db", "register_blueprints", "capture_context", "log_request"]
