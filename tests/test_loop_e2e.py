@@ -127,11 +127,12 @@ def test_loop_end_to_end(loop_env, tmp_path, monkeypatch) -> None:
     assert pending[0].drift_result_id == drift_result.id
     review_id = pending[0].id
 
-    # 2. API approval.
+    # 2. API approval (authenticated).
+    monkeypatch.setenv("MIRAGE_API_KEY", "e2e-key")
     app = Flask(__name__)
     app.register_blueprint(bp)
     client = app.test_client()
-    resp = client.post(f"/api/reviews/{review_id}/approve", json={"reviewer": "e2e"})
+    resp = client.post(f"/api/reviews/{review_id}/approve", json={"reviewer": "e2e"}, headers={"X-API-Key": "e2e-key"})
     assert resp.status_code == 200
 
     # 3. Sweep retrains through the gate.
