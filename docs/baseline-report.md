@@ -1,6 +1,6 @@
 # Combined Baseline Report
 
-**Date:** 2026-09-15 (honesty audit appended same day)
+**Date:** 2026-09-15 (honesty audit appended same day; flow-mapping retrain appended 2026-09-21)
 **Model:** stacking ensemble (RF + XGBoost + LR meta-learner), k-fold cross-validated
 **Run:** `python -m app.model.train` — CICIDS2017 sample 0.1, UNSW-NB15 sample 0.5, k-folds 5, val-size 0.2, random_state 42
 **Source commit (loader fix):** `4850502` · **Honesty audit commit:** see git log (`phase-a/model-honesty`)
@@ -114,3 +114,71 @@ Zeroing `method_get`, `method_post`, `method_other` in both train and eval:
 1. **The 0.92 AUC headline overstates the model.** Honest estimates: ~0.64 across time, ~0.18-0.49 across datasets. The random-split number measures memorization of dataset artifacts, including our own `method ~ bytes>1000` fabrication.
 2. **Recall-heavy 0.5 default was hiding a 60% false-alarm rate**; deployed threshold is now 0.80 with an explicit tradeoff table.
 3. **Real-payload scoring stays weak** (SQLi probe scores 0.76; borderline at the new threshold) — consistent with the mapping-artifact finding. Fixing this means better feature grounding (Tier 2 capture fidelity work), not more training data.
+
+## Retrain on direct flow-to-feature mapping (2026-09-21)
+
+Precursor fix (`eb2e9bc`): `_cicids_row_to_http` / `_unsw_row_to_http` fabricated
+`method` from arbitrary flow thresholds (`total_bytes > 1000`, `Spkts > Dpkts`),
+giving `method_get`/`method_post` 75% of feature importance. Replaced with direct
+flow-column → 25-feature mappers (`_cicids_frame_to_features`,
+`_unsw_frame_to_features`); `method_*` is now constant 0.0 for public data
+(no true HTTP method exists in flow records). Retrained from scratch:
+
+**Run:** `python -m app.model.train --cicids-sample 0.05 --unsw-sample 0.25`
+(k-folds 5, val-size 0.2, random_state 42). Sample fractions halved vs the 0.1/0.5
+baseline: two full-size attempts were both OOM-killed at the "Retraining base
+learners on full dataset" stage (host: 3.8 GiB RAM + 1 GiB swap, both under
+pressure — journal logged `Under memory pressure, flushing caches`). Model config
+unchanged, so the comparison stays honest; only data volume differs.
+
+| Source | Rows loaded | Attacks |
+|---|---|---|
+| CICIDS2017 (0.05) | 106,901 | 15,262 |
+| UNSW-NB15 (0.25) | 635,011 | 80,164 |
+| **Combined** | **741,912** | **95,426** |
+
+| Split | Rows | Attacks |
+|---|---|---|
+| Train (80%) | 593,529 | 76,341 |
+| Validation (20%, persisted `data/validation_set.npz`) | 148,383 | 19,085 |
+
+**Validation (held-out 20%, champion/challenger gate, calibrated threshold 0.95):**
+
+| Metric | Value |
+|---|---|
+| Precision | 0.9594 |
+| Recall | 0.9824 |
+| F1 | 0.9708 |
+| AUC | 0.9997 |
+
+Challenger `v1789976193` vs prior champion `v1789430774`: **promoted**
+(`Challenger beats champion: F1 0.9708 > 0.0024`). The old champion collapses to
+F1 0.0024 on the new validation set — it was scoring the `method_*` artifact,
+which is now all zeros. This is the strongest confirmation of the audit finding:
+the previous model learned our fabrication, not attacks.
+
+**Top-8 features by importance (no `method_*`, no `user_agent_entropy`):**
+
+1. header_count — 0.5576
+2. path_length — 0.1467
+3. payload_length — 0.0773
+4. longest_param_len — 0.0581
+5. avg_param_len — 0.0532
+6. param_name_entropy — 0.0200
+7. param_value_entropy — 0.0185
+8. digit_ratio — 0.0152
+
+**Training time:** ~30 min wall clock (2026-09-21T07:06:22Z → 07:36:54Z).
+
+**API verification:** `GET /api/health` → healthy, `model_version":"v1789976193"`;
+`GET /api/model/info` → 593,529 training samples, held-out metrics as above.
+
+**Known regression (documented, not a bug):** the SQLi probe
+(`pass=1 OR 1=1`) that scored 0.76 under the old champion now scores **0.003
+(benign)**. Attack-keyword features (`sql_keyword_count`, `rce_keyword_count`,
+…) are identically 0 across all public flow data, so the retrained model assigns
+them no weight. Real-HTTP attack detection now depends on honeypot capture data
+entering retraining — i.e. the Tier 2 adaptive loop. Until the loop runs, the
+model is a flow-anomaly classifier, not a payload-signature detector. The
+temporal-split (AUC 0.64) and cross-dataset (AUC 0.18–0.49) caveats from the
+audit still stand; re-running `scripts/evaluate.py` on the new pipeline is open.
