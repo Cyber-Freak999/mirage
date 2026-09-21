@@ -36,6 +36,8 @@ class RetrainingConfig:
     k_folds: int = 5
     cicids_dir: Path | None = None
     unsw_dir: Path | None = None
+    cicids_sample: float = 0.05
+    unsw_sample: float = 0.25
 
 
 class RetrainingScheduler:
@@ -238,6 +240,8 @@ class RetrainingScheduler:
             cicids_dir=self.config.cicids_dir,
             unsw_dir=self.config.unsw_dir,
             k_folds=self.config.k_folds,
+            cicids_sample=self.config.cicids_sample,
+            unsw_sample=self.config.unsw_sample,
         )
 
         if result.promoted:
