@@ -138,6 +138,7 @@ class RetrainingScheduler:
         conn.close()
 
         if not new_rows:
+            self.sweep_reviews()
             return None
 
         self._samples_since_check += len(new_rows)
@@ -166,7 +167,7 @@ class RetrainingScheduler:
             }
 
             review = self.review_gate.create_review(
-                drift_result_id=0,
+                drift_result_id=drift_result.id or 0,
                 max_psi=drift_result.max_psi,
                 psi_scores=drift_result.psi_scores,
                 sample_size=drift_result.sample_size,
@@ -176,6 +177,7 @@ class RetrainingScheduler:
             logger.warning(f"Drift triggered review {review.id}. Waiting for approval or timeout.")
 
         self._samples_since_check = 0
+        self.sweep_reviews()
         return drift_result
 
     def _rows_to_features(self, rows) -> np.ndarray:
@@ -183,6 +185,26 @@ class RetrainingScheduler:
         from ..schema.capture import rows_to_features
 
         return rows_to_features(rows)
+
+    def sweep_reviews(self) -> list[int]:
+        """Process reviews ready to proceed (approved or auto-proceeded).
+
+        Called on every scheduled tick so manual decisions (API/dashboard)
+        take effect within one interval and timed-out reviews auto-proceed
+        per the 72-hour policy. Manual decisions apply on the next sweep.
+
+        Returns:
+            IDs of reviews for which retraining ran.
+        """
+        processed = []
+        for review in self.review_gate.get_actionable_reviews():
+            if not self.review_gate.should_proceed(review.id):
+                continue
+            logger.info(f"Sweep: retraining for review {review.id} (status auto-proceeded or approved)")
+            self.process_review(review.id, approved=True, reviewer="system-sweep")
+            self.review_gate.mark_done(review.id)
+            processed.append(review.id)
+        return processed
 
     def process_review(self, review_id: int, approved: bool, reviewer: str = "system") -> ValidationResult | None:
         """Process a review decision and run retraining if approved."""

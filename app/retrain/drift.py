@@ -101,6 +101,7 @@ class DriftResult:
     max_psi: float
     triggered: bool
     tracked_features: list[str]
+    id: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -240,7 +241,7 @@ class DriftMonitor:
             tracked_features=self.tracked_features,
         )
 
-        self._log_drift_check(result)
+        result.id = self._log_drift_check(result)
 
         if triggered:
             logger.warning(f"DRIFT DETECTED: max PSI = {max_psi:.4f} (threshold: {self.psi_threshold})")
@@ -250,11 +251,15 @@ class DriftMonitor:
 
         return result
 
-    def _log_drift_check(self, result: DriftResult):
-        """Log drift check result to database."""
+    def _log_drift_check(self, result: DriftResult) -> int:
+        """Log drift check result to database.
+
+        Returns:
+            The inserted row id, for linking review entries.
+        """
         conn = sqlite3.connect(str(DRIFT_DB))
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO drift_checks (timestamp, sample_size, psi_scores, max_psi, triggered, tracked_features)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -268,8 +273,10 @@ class DriftMonitor:
                 json.dumps(result.tracked_features),
             ),
         )
+        row_id = cursor.lastrowid
         conn.commit()
         conn.close()
+        return row_id
 
     def get_drift_history(self, limit: int = 100) -> list[DriftResult]:
         """Get recent drift check history."""

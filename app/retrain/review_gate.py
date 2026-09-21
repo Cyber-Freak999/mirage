@@ -20,6 +20,7 @@ class ReviewStatus(Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     AUTO_PROCEEDED = "auto_proceeded"
+    DONE = "done"
 
 
 @dataclass
@@ -151,6 +152,30 @@ class ReviewGate:
 
         return [ReviewEntry.from_row(row) for row in rows]
 
+    def get_actionable_reviews(self) -> list[ReviewEntry]:
+        """Get reviews the scheduler sweep should consider.
+
+        Covers pending (fresh or timed-out → auto-proceeded), approved, and
+        auto-proceeded entries. Decided-otherwise (rejected/done) rows are
+        excluded. Applies the timeout check first.
+        """
+        self._check_timeouts()
+
+        conn = sqlite3.connect(str(REVIEW_DB))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT * FROM review_queue WHERE status IN (?, ?, ?) ORDER BY timestamp ASC",
+            (
+                ReviewStatus.PENDING.value,
+                ReviewStatus.APPROVED.value,
+                ReviewStatus.AUTO_PROCEEDED.value,
+            ),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [ReviewEntry.from_row(row) for row in rows]
+
     def get_review(self, review_id: int) -> ReviewEntry | None:
         """Get a specific review by ID."""
         conn = sqlite3.connect(str(REVIEW_DB))
@@ -237,6 +262,36 @@ class ReviewGate:
         if entry.status == ReviewStatus.REJECTED:
             return False
         return False
+
+    def mark_done(self, review_id: int) -> bool:
+        """Mark a review as consumed after retraining ran.
+
+        Prevents the scheduler sweep from retraining the same review twice.
+        Only transitions from approved/auto_proceeded states.
+
+        Returns:
+            True if the row was transitioned.
+        """
+        conn = sqlite3.connect(str(REVIEW_DB))
+        conn.execute("PRAGMA journal_mode=WAL")
+        cursor = conn.execute(
+            """
+            UPDATE review_queue
+            SET status = ?, review_timestamp = ?
+            WHERE id = ? AND status IN (?, ?)
+            """,
+            (
+                ReviewStatus.DONE.value,
+                time.time(),
+                review_id,
+                ReviewStatus.APPROVED.value,
+                ReviewStatus.AUTO_PROCEEDED.value,
+            ),
+        )
+        conn.commit()
+        updated = cursor.rowcount > 0
+        conn.close()
+        return updated
 
     def get_review_stats(self) -> dict:
         """Get review queue statistics."""

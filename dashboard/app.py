@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objs as go
-from dash import Input, Output, callback_context, dcc, html
+from dash import MATCH, Input, Output, callback_context, dcc, html
 
 from app.honeypot import DB_PATH
 from app.model.ensemble import list_model_versions, load_model
@@ -318,9 +318,29 @@ def render_retrain():
             "approved": "success",
             "rejected": "danger",
             "auto_proceeded": "info",
+            "done": "secondary",
         }.get(r["status"], "secondary")
 
         ts = pd.Timestamp(r["timestamp"], unit="s").strftime("%Y-%m-%d %H:%M:%S")
+        card_body = [
+            html.P(f"Created: {ts}"),
+            html.P(f"Max PSI: {r['max_psi']:.4f}"),
+            html.P(f"Samples: {r['sample_size']}"),
+            html.Pre(json.dumps(r["psi_scores"], indent=2)),
+        ]
+        if r["status"] == "pending":
+            # TODO(Tier3): gate these behind admin auth (Tier 3 #18).
+            card_body += [
+                dbc.Button(
+                    "Approve",
+                    id={"type": "btn-approve", "index": r["id"]},
+                    color="success",
+                    size="sm",
+                    className="me-2",
+                ),
+                dbc.Button("Reject", id={"type": "btn-reject", "index": r["id"]}, color="danger", size="sm"),
+                html.Div(id={"type": "review-output", "index": r["id"]}, className="mt-2"),
+            ]
         review_cards.append(
             dbc.Card(
                 [
@@ -330,14 +350,7 @@ def render_retrain():
                             dbc.Badge(r["status"].replace("_", " ").title(), color=status_color, className="ms-2"),
                         ]
                     ),
-                    dbc.CardBody(
-                        [
-                            html.P(f"Created: {ts}"),
-                            html.P(f"Max PSI: {r['max_psi']:.4f}"),
-                            html.P(f"Samples: {r['sample_size']}"),
-                            html.Pre(json.dumps(r["psi_scores"], indent=2)),
-                        ]
-                    ),
+                    dbc.CardBody(card_body),
                 ],
                 className="mb-3",
             )
@@ -593,6 +606,42 @@ def admin_actions(reload_clicks, drift_clicks, val_clicks):
             return dbc.Alert(f"Failed: {e}", color="danger")
 
     return ""
+
+
+@app.callback(
+    Output({"type": "review-output", "index": MATCH}, "children"),
+    [
+        Input({"type": "btn-approve", "index": MATCH}, "n_clicks"),
+        Input({"type": "btn-reject", "index": MATCH}, "n_clicks"),
+    ],
+    prevent_initial_call=True,
+)
+def review_actions(approve_clicks, reject_clicks):
+    """Handle review approve/reject clicks (decision takes effect on next sweep)."""
+    # TODO(Tier3): gate these behind admin auth (Tier 3 #18).
+    ctx = callback_context
+    if not ctx.triggered:
+        return ""
+    prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    try:
+        review_id = json.loads(prop_id)["index"]
+    except (ValueError, KeyError, TypeError):
+        return dbc.Alert("Could not identify review", color="danger")
+
+    gate = ReviewGate()
+    if "btn-approve" in prop_id:
+        ok = gate.approve(review_id, "dashboard")
+        return (
+            dbc.Alert(f"Review #{review_id} approved — retrains on next sweep", color="success")
+            if ok
+            else dbc.Alert(f"Review #{review_id} already decided", color="warning")
+        )
+    ok = gate.reject(review_id, "dashboard")
+    return (
+        dbc.Alert(f"Review #{review_id} rejected", color="info")
+        if ok
+        else dbc.Alert(f"Review #{review_id} already decided", color="warning")
+    )
 
 
 if __name__ == "__main__":
