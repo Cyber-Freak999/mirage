@@ -1,6 +1,5 @@
 """APScheduler-based retraining scheduler with persistent job store."""
 
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -181,25 +180,9 @@ class RetrainingScheduler:
 
     def _rows_to_features(self, rows) -> np.ndarray:
         """Convert database rows to feature vectors."""
-        from ..schema.features import extract_features
+        from ..schema.capture import rows_to_features
 
-        features = []
-        for row in rows:
-            try:
-                raw_request = json.loads(row["raw_request"]) if row["raw_request"] else {}
-            except (json.JSONDecodeError, TypeError):
-                raw_request = {}
-
-            feat = extract_features(
-                method=row["method"],
-                path=row["path"],
-                query_string=row["query_string"] or "",
-                headers={"user-agent": row["user_agent"] or ""},
-                body=raw_request.get("body", "") if isinstance(raw_request, dict) else "",
-            )
-            features.append(feat)
-
-        return np.array(features)
+        return rows_to_features(rows)
 
     def process_review(self, review_id: int, approved: bool, reviewer: str = "system") -> ValidationResult | None:
         """Process a review decision and run retraining if approved."""

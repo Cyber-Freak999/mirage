@@ -1,11 +1,8 @@
 """RCE/upload-style honeypot entry points."""
 
-import sqlite3
-import time
-
 from flask import Blueprint, jsonify, request
 
-from . import DB_PATH
+from . import capture_context, log_request
 
 bp = Blueprint("rce", __name__)
 
@@ -53,22 +50,6 @@ _fake_files = {
 }
 
 _current_dir = "/home/admin"
-
-
-def _log_request(source_ip, method, path, query_string, user_agent, raw_request, attack_type):
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        INSERT INTO requests
-        (timestamp, source_ip, method, path, query_string,
-         user_agent, raw_request, attack_type, decoy_indicator)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (time.time(), source_ip, method, path, query_string, user_agent, raw_request, attack_type, 0),
-    )
-    conn.commit()
-    conn.close()
 
 
 def _resolve_path(path: str) -> str:
@@ -167,13 +148,10 @@ def _execute_command(cmd: str):
 def upload():
     """Simulated file upload endpoint — RCE/upload target."""
     source_ip = request.remote_addr or "unknown"
-    method = request.method
-    path = request.full_path or request.path
-    query_string = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
-    user_agent = request.headers.get("User-Agent", "")
-    raw_request = request.get_data(as_text=True)
+    ctx = capture_context()
+    method = ctx["method"]
 
-    _log_request(source_ip, method, path, query_string, user_agent, raw_request, "rce")
+    log_request(source_ip, ctx, "rce")
 
     if method == "POST":
         file = request.files.get("file")
@@ -204,13 +182,10 @@ def upload():
 def diagnostics():
     """Simulated admin diagnostics panel — command execution style RCE target."""
     source_ip = request.remote_addr or "unknown"
-    method = request.method
-    path = request.full_path or request.path
-    query_string = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
-    user_agent = request.headers.get("User-Agent", "")
-    raw_request = request.get_data(as_text=True)
+    ctx = capture_context()
+    method = ctx["method"]
 
-    _log_request(source_ip, method, path, query_string, user_agent, raw_request, "rce")
+    log_request(source_ip, ctx, "rce")
 
     if method == "POST":
         data = request.form

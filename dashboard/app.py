@@ -571,23 +571,9 @@ def admin_actions(reload_clicks, drift_clicks, val_clicks):
             conn.close()
 
             if rows:
-                from app.schema.features import extract_features
+                from app.schema.capture import rows_to_features
 
-                X = []
-                for row in rows:
-                    try:
-                        raw = json.loads(row["raw_request"]) if row["raw_request"] else {}
-                    except Exception:
-                        raw = {}
-                    feat = extract_features(
-                        method=row["method"],
-                        path=row["path"],
-                        query_string=row["query_string"] or "",
-                        headers={"user-agent": row["user_agent"] or ""},
-                        body=raw.get("body", "") if isinstance(raw, dict) else "",
-                    )
-                    X.append(feat)
-                X = np.array(X)
+                X = rows_to_features(rows)
                 result = monitor.check_drift(X)
                 return dbc.Alert(
                     f"Drift check complete. Max PSI: {result.max_psi:.4f}. " f"Triggered: {result.triggered}",
