@@ -55,7 +55,7 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 
 17. `[ ]` **API hardening.** `app` | `must` — API-key auth (finally use `python-dotenv`), `MAX_CONTENT_LENGTH`, stop returning raw exception strings (`api/__init__.py:97,137,180`), protect `/api/model/reload`, set `SECRET_KEY`.
 18. `[ ]` **Dashboard production mode.** `dashboard` | `must` — no `debug=True` in prod (`dashboard/app.py:613`); auth on admin actions (Reload Model, Trigger Drift Check, Create Validation Set, `:511-521`); replace the random-placeholder "Model Confidence" tab (`:68-76`) with real data.
-19. `[ ]` **Docker hardening.** `infra` | `must` — non-root `USER` in both Dockerfiles; replace curl-based healthchecks with a python one-liner (curl is not installed); consider splitting the single shared `mirage-internal` network so dashboard/api/honeypot/retrainer are not all mutually reachable; drop the obsolete compose `version:` key.
+19. `[ ]` **Docker hardening.** `infra` | `must` — non-root `USER` in both Dockerfiles; replace curl-based healthchecks with a python one-liner (curl is not installed); decide on the single shared `mirage-internal` network (already `internal: true`; splitting buys little since services share a volume, not sockets — record rationale); drop the obsolete compose `version:` key; pass through `MIRAGE_*` env with dev defaults. Verification is tiered for the small host: `compose config` + both image builds + single-worker API smoke test (`--workers 1` override, time-boxed) run locally; full production-topology run is deferred to the VPS (see #29); never start the retrainer container on the small host (a drift trigger could launch a multi-GB retrain).
 20. `[ ]` **Capture-data retention policy.** `docs`/`infra` | `should` — attacker payloads may contain PII; define retention (e.g. purge `raw_request` after N days, keep aggregated features).
 
 ### Tier 4 -- Hygiene (Phase D)
@@ -71,7 +71,7 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 26. `[ ]` **Add Apache-2.0 LICENSE** (full text) at repo root. `docs` | `must` — currently absent.
 27. `[~]` **Attribution / NOTICE.** `docs` | `must` — CICIDS2017 + UNSW-NB15 citations and the UNSW academic-use restriction verified present (README L100-101); decide whether a NOTICE file is needed and add it if so.
 28. `[ ]` **Tracking-docs fate + commit.** `infra` | `should` — decide whether `docs/superpowers/plans/*.md` remain repo artifacts; commit `BACKLOG.md` + `docs/` (or relocate) before release.
-29. `[ ]` **Final gates + flip public.** `infra` | `must` — re-run `uv run ruff check .` + `uv run pytest tests/`, confirm `git status` clean, then flip repo visibility. Depends on Tier 3 completion.
+29. `[ ]` **Final gates + flip public.** `infra` | `must` — re-run `uv run ruff check .` + `uv run pytest tests/`, confirm `git status` clean, then flip repo visibility. Includes the deferred VPS checklist from #19: one-time volume `chown` if migrating root-owned data, production `.env` (`MIRAGE_SECRET_KEY`/`MIRAGE_API_KEY`/`MIRAGE_ADMIN_KEY`, never dev defaults), full production-topology `compose up` with healthy healthchecks, retrainer enabled. Depends on Tier 3 completion.
 
 **Verified this pass (2026-09-13, still true 2026-09-15):** gitignore covers `data/`, `*.db*`, `*.npz`, `*.joblib`, `*.bin`, `.env`; secrets scan clean (no `.env`, no tracked key/secret patterns); quality gates green (ruff clean, 44 tests passed). Model versioning works end-to-end; deterministic re-runs produce byte-identical models.
 
