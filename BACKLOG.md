@@ -79,6 +79,14 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 
 - `--` **"Benign" class frozen from public datasets.** `docs` | monitor — by design; retraining only sees captured honeypot (attack-only) + public data, so drift detection is the only adaptive lever on benigns. Revisit if a benign-capture source is added (e.g. mirroring real traffic to a twin service).
 
+### Deferred — post-release follow-ups (all work items done; these need time, hardware, or humans)
+
+- `[ ]` **VPS deploy checklist.** `infra` | `must` (ops) — provision a ≥2G RAM / 25G+ disk VPS (spec §17); one-time `mirage-data` volume `chown` if migrating root-owned data; production `.env` (`MIRAGE_SECRET_KEY`/`MIRAGE_API_KEY`/`MIRAGE_ADMIN_KEY`, never dev defaults); full production-topology `compose up` with green healthchecks; enable the retrainer (never started on the small dev host); first backup + purge cron. Carried from #19/#29.
+- `[ ]` **Legal review before going live.** `docs` | `must` (human) — spec §14: Nigerian Cybercrimes Act 2015 posture unresolved; consult someone knowledgeable before capturing real traffic. Post the `security.txt`/README disclosure notice at deploy time regardless.
+- `[ ]` **Live-demo milestone.** `app` | `must` (time) — spec §19: 2–4 weeks of real honeypot traffic plus at least one genuine drift → review → retrain → promotion cycle. This is the only event that populates payload-keyword features (identically zero in all public flow data; the live champion scores real SQLi probes 0.003) and fills the dashboard drift/retraining panels with genuine history.
+- `[ ]` **Re-run honesty studies on the new pipeline.** `app`/`docs` | `should` — `scripts/evaluate.py` temporal/cross/zero-features modes were measured against the pre-fix mapping; re-run against `v1789976193`'s pipeline and append to `docs/baseline-report.md`. Open since the 2026-09-21 retrain.
+- `[ ]` **Full-size retrain on bigger hardware.** `app` | `could` — the live champion trained at 0.05/0.25 samples after two full-size (0.1/0.5) OOM kills on the 3.8 GiB host; a ≥8G machine could train the full 1.48M rows and test whether the 0.9708 F1 holds at full volume.
+
 ### Dropped / merged (v3.0 restructure)
 
 - old #10 (integration test) -> superseded by #16 (end-to-end loop test; spec §16 exists).
