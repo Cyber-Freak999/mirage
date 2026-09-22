@@ -396,3 +396,53 @@ def list_model_versions() -> list[ModelVersion]:
         except Exception as e:
             logger.warning(f"Failed to load {meta_path}: {e}")
     return sorted(versions, key=lambda v: v.timestamp, reverse=True)
+
+
+def prune_models(keep_last_n: int = 3, dry_run: bool = False) -> list[str]:
+    """Delete archived model versions beyond the retention window.
+
+    Spec section 9 never deletes by default — pruning is strictly opt-in via
+    this function (or ``scripts/prune_models.py``). The live ``champion.*``
+    files are never touched, and the champion's versioned pair is always kept
+    alongside the ``keep_last_n`` newest versions.
+
+    Args:
+        keep_last_n: Number of newest versioned pairs to keep (plus champion).
+        dry_run: Report candidates without deleting anything.
+
+    Returns:
+        Sorted version ids that were (or would be) removed.
+    """
+    champion_id: str | None = None
+    champion_meta = MODEL_DIR / "champion.json"
+    if champion_meta.exists():
+        try:
+            with open(champion_meta) as f:
+                champion_id = json.load(f).get("version_id")
+        except Exception as e:
+            logger.warning(f"Failed to read {champion_meta}: {e}")
+
+    versions = list_model_versions()
+    keep = {v.version_id for v in versions[: max(keep_last_n, 0)]}
+    if champion_id:
+        keep.add(champion_id)
+
+    removed = []
+    for version in versions:
+        if version.version_id in keep:
+            continue
+        removed.append(version.version_id)
+        if dry_run:
+            continue
+        for suffix in (".pkl", ".json"):
+            path = MODEL_DIR / f"{version.version_id}{suffix}"
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning(f"Failed to delete {path}: {e}")
+
+    if dry_run:
+        logger.info(f"Would prune {len(removed)} version(s): {sorted(removed)}")
+    else:
+        logger.info(f"Pruned {len(removed)} version(s): {sorted(removed)}")
+    return sorted(removed)
