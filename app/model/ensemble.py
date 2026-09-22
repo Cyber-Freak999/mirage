@@ -224,7 +224,7 @@ class StackingEnsemble:
         rf_proba = self.rf.predict_proba(X)[:, 1]
         xgb_proba = self.xgb.predict_proba(X)[:, 1]
         meta_input = np.column_stack([rf_proba, xgb_proba])
-        return self.meta.predict_proba(meta_input)[:, 1]
+        return np.asarray(self.meta.predict_proba(meta_input)[:, 1])
 
     def predict(self, X: np.ndarray, threshold: float | None = None) -> np.ndarray:
         """Get binary predictions at the model's (or an explicit) threshold."""

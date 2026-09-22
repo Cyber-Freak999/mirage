@@ -100,13 +100,13 @@ def _unsw_label_column(frame: pd.DataFrame) -> str | None:
 def _binary_labels(series: pd.Series, label_col: str) -> np.ndarray:
     """Convert an UNSW label series to binary 0/1 attack labels."""
     if label_col == "Label":
-        return series.astype(int).values
-    return series.apply(lambda x: 0 if str(x).lower() == "normal" else 1).values
+        return np.asarray(series.astype(int).values, dtype=int)
+    return np.asarray(series.apply(lambda x: 0 if str(x).lower() == "normal" else 1).values, dtype=int)
 
 
 def _cicids_labels(frame: pd.DataFrame) -> np.ndarray:
     """Return binary labels for a CICIDS frame: 0 for BENIGN, 1 otherwise."""
-    return frame["Label"].apply(lambda x: 0 if "BENIGN" in str(x).upper() else 1).values
+    return np.asarray(frame["Label"].apply(lambda x: 0 if "BENIGN" in str(x).upper() else 1).values, dtype=int)
 
 
 def load_cicids2017(data_dir: Path, sample_frac: float = 1.0, random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
@@ -221,7 +221,8 @@ def load_unsw_nb15(data_dir: Path, sample_frac: float = 1.0, random_state: int =
     if not csv_files:
         raise FileNotFoundError(f"No UNSW-NB15 CSV files found in {data_dir}")
 
-    headless_files, headed_files = [], []
+    headless_files: list[Path] = []
+    headed_files: list[Path] = []
     for csv_file in csv_files:
         with open(csv_file, encoding="utf-8-sig", errors="replace") as fh:
             first_line = next((line.rstrip("\n") for line in fh if line.strip()), "")

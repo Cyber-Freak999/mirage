@@ -32,11 +32,13 @@ def count_purgeable(db_path: Path, cutoff: float) -> int:
         Number of rows that would be purged.
     """
     conn = sqlite3.connect(str(db_path))
-    count = conn.execute(
-        "SELECT COUNT(*) FROM requests WHERE timestamp < ?"
-        " AND (raw_request IS NOT NULL OR headers_json IS NOT NULL)",
-        (cutoff,),
-    ).fetchone()[0]
+    count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM requests WHERE timestamp < ?"
+            " AND (raw_request IS NOT NULL OR headers_json IS NOT NULL)",
+            (cutoff,),
+        ).fetchone()[0]
+    )
     conn.close()
     return count
 
@@ -57,7 +59,7 @@ def purge(db_path: Path, cutoff: float) -> int:
         " WHERE timestamp < ? AND (raw_request IS NOT NULL OR headers_json IS NOT NULL)",
         (cutoff,),
     )
-    purged = cursor.rowcount
+    purged = int(cursor.rowcount)
     conn.commit()
     conn.close()
     return purged

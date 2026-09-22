@@ -260,6 +260,7 @@ class DriftMonitor:
         row_id = cursor.lastrowid
         conn.commit()
         conn.close()
+        assert row_id is not None, "drift check insert returned no row id"
         return row_id
 
     def get_drift_history(self, limit: int = 100) -> list[DriftResult]:

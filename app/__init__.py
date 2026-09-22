@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 DEV_SECRET_KEY = "dev-only-insecure"
 
 
-def create_app(config: dict = None) -> Flask:
+def create_app(config: dict | None = None) -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__)
 

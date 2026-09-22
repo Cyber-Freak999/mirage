@@ -200,6 +200,8 @@ class RetrainingScheduler:
         """
         processed = []
         for review in self.review_gate.get_actionable_reviews():
+            if review.id is None:
+                continue
             if not self.review_gate.should_proceed(review.id):
                 continue
             logger.info(f"Sweep: retraining for review {review.id} (status auto-proceeded or approved)")

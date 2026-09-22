@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
-_model: StackingEnsemble = None
+_model: StackingEnsemble | None = None
 _model_version: str = "unknown"
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -74,7 +74,7 @@ def require_api_key(view):
     return wrapper
 
 
-def get_model() -> StackingEnsemble:
+def get_model() -> StackingEnsemble | None:
     global _model, _model_version
     if _model is None:
         try:
@@ -87,7 +87,7 @@ def get_model() -> StackingEnsemble:
     return _model
 
 
-def reload_model():
+def reload_model() -> StackingEnsemble | None:
     global _model, _model_version
     _model = None
     _model = get_model()

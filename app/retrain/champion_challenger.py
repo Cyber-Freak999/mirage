@@ -180,6 +180,7 @@ class ChampionChallenger:
         if X_val is None or y_val is None:
             X_val, y_val = load_validation_set()
 
+        assert challenger.version is not None, "challenger has no version metadata"
         logger.info(f"Validating challenger {challenger.version.version_id} on {len(X_val)} samples")
 
         if calibrate:
@@ -245,7 +246,7 @@ class ChampionChallenger:
         Promotion criteria: challenger must meet or beat champion on F1.
         Can be extended to require improvement on multiple metrics.
         """
-        return challenger["f1"] >= champion["f1"]
+        return bool(challenger["f1"] >= champion["f1"])
 
     def _log_validation(self, result: ValidationResult):
         """Log validation result to database."""

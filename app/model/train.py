@@ -65,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     ensemble = train_initial_model(X_train, y_train, k_folds=args.k_folds, random_state=args.random_state)
 
     result = ChampionChallenger().validate(ensemble, X_val=X_val, y_val=y_val)
+    assert ensemble.version is not None, "trained ensemble has no version metadata"
     # NOTE: validate() already persists on promotion; no second save here.
     if result.promoted:
         try:
