@@ -63,7 +63,6 @@ def _seed_captures(n: int = 250) -> None:
             "evil-bot/1.0",
             "username=" + "x" * 5000,
             "sqli",
-            0,
             '{"user-agent": "evil-bot/1.0", "content-type": "application/x-www-form-urlencoded"}',
             "application/x-www-form-urlencoded",
         )
@@ -71,8 +70,8 @@ def _seed_captures(n: int = 250) -> None:
     ]
     conn.executemany(
         "INSERT INTO requests (timestamp, source_ip, method, path, query_string,"
-        " user_agent, raw_request, attack_type, decoy_indicator, headers_json, content_type)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " user_agent, raw_request, attack_type, headers_json, content_type)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

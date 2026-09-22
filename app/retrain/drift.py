@@ -34,20 +34,6 @@ def init_drift_db():
         )
         """
     )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS feature_stats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp REAL NOT NULL,
-            feature_name TEXT NOT NULL,
-            mean REAL NOT NULL,
-            std REAL NOT NULL,
-            min_val REAL NOT NULL,
-            max_val REAL NOT NULL,
-            sample_size INTEGER NOT NULL
-        )
-        """
-    )
     conn.commit()
     conn.close()
 
@@ -115,12 +101,10 @@ class DriftMonitor:
         psi_threshold: float = 0.25,
         top_k_features: int = 8,
         min_samples: int = 200,
-        reference_window: int = 10000,
     ):
         self.psi_threshold = psi_threshold
         self.top_k_features = top_k_features
         self.min_samples = min_samples
-        self.reference_window = reference_window
 
         self.reference_distributions: dict[str, np.ndarray] = {}
         self.tracked_features: list[str] = []

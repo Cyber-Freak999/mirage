@@ -44,7 +44,6 @@ def init_db():
             user_agent TEXT,
             raw_request TEXT,
             attack_type TEXT NOT NULL DEFAULT 'unknown',
-            decoy_indicator INTEGER NOT NULL DEFAULT 0,
             headers_json TEXT,
             content_type TEXT
         )
@@ -106,9 +105,9 @@ def log_request(source_ip: str, capture: dict[str, str], attack_type: str):
         """
         INSERT INTO requests
         (timestamp, source_ip, method, path, query_string,
-         user_agent, raw_request, attack_type, decoy_indicator,
+         user_agent, raw_request, attack_type,
          headers_json, content_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             time.time(),
@@ -119,7 +118,6 @@ def log_request(source_ip: str, capture: dict[str, str], attack_type: str):
             capture["user_agent"],
             capture["raw_request"],
             attack_type,
-            0,
             capture["headers_json"],
             capture["content_type"],
         ),

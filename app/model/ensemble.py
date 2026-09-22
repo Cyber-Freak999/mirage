@@ -256,13 +256,37 @@ def train_initial_model(
     rf_params: dict | None = None,
     xgb_params: dict | None = None,
     meta_params: dict | None = None,
+    random_state: int = 42,
 ) -> StackingEnsemble:
-    """Train initial model from scratch."""
+    """Train initial model from scratch.
+
+    Args:
+        X: Feature matrix.
+        y: Binary labels.
+        k_folds: Stacking folds.
+        rf_params: Random Forest overrides (merged over defaults).
+        xgb_params: XGBoost overrides (merged over defaults).
+        meta_params: Meta-learner overrides (merged over defaults).
+        random_state: Seed applied to all three learners unless overridden
+            in the corresponding params dict.
+    """
+    rf = {**DEFAULT_RF_PARAMS, **(rf_params or {}), "random_state": (rf_params or {}).get("random_state", random_state)}
+    xgb = {
+        **DEFAULT_XGB_PARAMS,
+        **(xgb_params or {}),
+        "random_state": (xgb_params or {}).get("random_state", random_state),
+    }
+    meta = {
+        **DEFAULT_META_PARAMS,
+        **(meta_params or {}),
+        "random_state": (meta_params or {}).get("random_state", random_state),
+    }
     ensemble = StackingEnsemble(
         k_folds=k_folds,
-        rf_params=rf_params,
-        xgb_params=xgb_params,
-        meta_params=meta_params,
+        rf_params=rf,
+        xgb_params=xgb,
+        meta_params=meta,
+        random_state=random_state,
     )
     ensemble.fit(X, y)
     return ensemble

@@ -1,3 +1,6 @@
+# Generated from pyproject.toml — do not edit by hand.
+# Regenerate with: uv pip compile pyproject.toml -o requirements.txt
+# (kept for Docker builds, which pip-install this file)
 # Core
 flask==3.0.3
 gunicorn==21.2.0

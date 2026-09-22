@@ -42,7 +42,7 @@ Honeypot → SQLite → Feature Extraction → Model → Dashboard
 
 ```bash
 uv sync
-uv run python -m app
+uv run flask --app "app:create_app()" run --port 5000
 ```
 
 The API and honeypot endpoints run on `http://localhost:5000`.
