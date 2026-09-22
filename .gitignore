@@ -30,3 +30,7 @@ data/
 .coverage
 htmlcov/
 coverage.xml
+
+# Session working notes (agentic plans); the curated record is
+# BACKLOG.md + docs/baseline-report.md, which stay tracked.
+docs/superpowers/
