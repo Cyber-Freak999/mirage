@@ -1,0 +1,12 @@
+# Keep runtime images lean: deps reinstall from requirements.txt, data/ ships
+# inside the image (API/retrainer read models + reference from it; the named
+# volume overlays it at deploy time).
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.superpowers/
+docs/superpowers/
+.github/

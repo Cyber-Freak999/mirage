@@ -13,9 +13,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Run as non-root (same caveat as Dockerfile.honeypot re: volume ownership).
+RUN groupadd -r appuser --gid 10000 \
+    && useradd -r -g appuser --uid 10000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8050
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8050/ || exit 1
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8050/', timeout=5).status==200 else 1)"
 
 CMD ["python", "-m", "dashboard.app"]
