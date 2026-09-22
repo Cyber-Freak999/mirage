@@ -81,6 +81,15 @@ uv run python scripts/purge_captures.py --days 30 --dry-run  # report only
 
 Run this on a schedule (e.g. host cron) wherever captures accumulate.
 
+### SQLite backups
+
+All system state lives in single SQLite files — back them up on a schedule
+(host cron recommended; the backup API snapshots without stopping services):
+
+```bash
+uv run python scripts/backup_dbs.py --keep-last 7  # data/backups/backup-*
+```
+
 ### Lint and format
 
 ```bash
