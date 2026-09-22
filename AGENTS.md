@@ -14,7 +14,7 @@ Mirage is a honeypot-driven adaptive intrusion detection system (IDS). A high-in
 ## Development Setup
 
 - `uv sync` to install dependencies
-- `uv run python -m app` for local dev
+- `uv run flask --app "app:create_app()" run --port 5000` for local dev
 - Docker: `docker compose up`
 
 ## Commands

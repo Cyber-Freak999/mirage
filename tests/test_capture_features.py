@@ -18,7 +18,6 @@ CREATE TABLE requests (
     user_agent TEXT,
     raw_request TEXT,
     attack_type TEXT NOT NULL DEFAULT 'unknown',
-    decoy_indicator INTEGER NOT NULL DEFAULT 0,
     headers_json TEXT,
     content_type TEXT
 )

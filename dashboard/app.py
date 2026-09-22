@@ -94,7 +94,6 @@ def get_recent_attacks(limit: int = 50) -> list[dict]:
                 "method": row["method"],
                 "path": row["path"],
                 "attack_type": row["attack_type"],
-                "decoy_indicator": row["decoy_indicator"],
             }
         )
     return attacks
@@ -247,7 +246,6 @@ def render_live_feed():
                     html.Td(attack["method"]),
                     html.Td(attack["path"]),
                     html.Td(dbc.Badge(attack["attack_type"].upper(), color=badge_color)),
-                    html.Td("Yes" if attack["decoy_indicator"] else "No"),
                 ]
             )
         )
@@ -262,7 +260,6 @@ def render_live_feed():
                         html.Th("Method"),
                         html.Th("Path"),
                         html.Th("Type"),
-                        html.Th("Decoy"),
                     ]
                 )
             ),
@@ -690,6 +687,12 @@ def admin_actions(reload_clicks, drift_clicks, val_clicks):
 
             create_validation_set()
             return dbc.Alert("Validation set created", color="success")
+        except FileExistsError:
+            return dbc.Alert(
+                "Validation set already exists and is the fixed promotion gate —"
+                " delete data/validation_set.npz to regenerate (invalidates prior comparisons)",
+                color="warning",
+            )
         except Exception as e:
             return dbc.Alert(f"Failed: {e}", color="danger")
 

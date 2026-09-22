@@ -1,0 +1,17 @@
+Mirage — Adaptive Intrusion Detection System
+Copyright 2026 Mirage contributors
+
+This product is licensed under the Apache License, Version 2.0
+(see the LICENSE file at the repository root).
+
+Third-party data attributions (see README "Datasets" for full citations):
+
+- CICIDS2017 — Sharafaldin, Habibi Lashkari, and Ghorbani, "Toward
+  Generating a New Intrusion Detection Dataset and Intrusion Traffic
+  Characterization," ICISSP 2018. Use requires citing the dataset paper.
+- UNSW-NB15 — Moustafa and Slay, "UNSW-NB15: A comprehensive data set for
+  network intrusion detection systems," 2015. Provided for academic
+  research; commercial use is restricted or requires author agreement.
+
+Dataset files themselves are never redistributed with this repository
+(they load at runtime from data/raw/, which is git-ignored).

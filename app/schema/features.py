@@ -299,7 +299,7 @@ SPECIAL_CHARS = set("!@#$%^&*()_+-=[]{}|;':\",./<>?`~\\")
 def _shannon_entropy(text: str) -> float:
     if not text:
         return 0.0
-    freq = {}
+    freq: dict[str, int] = {}
     for ch in text:
         freq[ch] = freq.get(ch, 0) + 1
     length = len(text)

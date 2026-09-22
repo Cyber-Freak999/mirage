@@ -224,7 +224,7 @@ class StackingEnsemble:
         rf_proba = self.rf.predict_proba(X)[:, 1]
         xgb_proba = self.xgb.predict_proba(X)[:, 1]
         meta_input = np.column_stack([rf_proba, xgb_proba])
-        return self.meta.predict_proba(meta_input)[:, 1]
+        return np.asarray(self.meta.predict_proba(meta_input)[:, 1])
 
     def predict(self, X: np.ndarray, threshold: float | None = None) -> np.ndarray:
         """Get binary predictions at the model's (or an explicit) threshold."""
@@ -256,13 +256,37 @@ def train_initial_model(
     rf_params: dict | None = None,
     xgb_params: dict | None = None,
     meta_params: dict | None = None,
+    random_state: int = 42,
 ) -> StackingEnsemble:
-    """Train initial model from scratch."""
+    """Train initial model from scratch.
+
+    Args:
+        X: Feature matrix.
+        y: Binary labels.
+        k_folds: Stacking folds.
+        rf_params: Random Forest overrides (merged over defaults).
+        xgb_params: XGBoost overrides (merged over defaults).
+        meta_params: Meta-learner overrides (merged over defaults).
+        random_state: Seed applied to all three learners unless overridden
+            in the corresponding params dict.
+    """
+    rf = {**DEFAULT_RF_PARAMS, **(rf_params or {}), "random_state": (rf_params or {}).get("random_state", random_state)}
+    xgb = {
+        **DEFAULT_XGB_PARAMS,
+        **(xgb_params or {}),
+        "random_state": (xgb_params or {}).get("random_state", random_state),
+    }
+    meta = {
+        **DEFAULT_META_PARAMS,
+        **(meta_params or {}),
+        "random_state": (meta_params or {}).get("random_state", random_state),
+    }
     ensemble = StackingEnsemble(
         k_folds=k_folds,
-        rf_params=rf_params,
-        xgb_params=xgb_params,
-        meta_params=meta_params,
+        rf_params=rf,
+        xgb_params=xgb,
+        meta_params=meta,
+        random_state=random_state,
     )
     ensemble.fit(X, y)
     return ensemble
@@ -372,3 +396,53 @@ def list_model_versions() -> list[ModelVersion]:
         except Exception as e:
             logger.warning(f"Failed to load {meta_path}: {e}")
     return sorted(versions, key=lambda v: v.timestamp, reverse=True)
+
+
+def prune_models(keep_last_n: int = 3, dry_run: bool = False) -> list[str]:
+    """Delete archived model versions beyond the retention window.
+
+    Spec section 9 never deletes by default — pruning is strictly opt-in via
+    this function (or ``scripts/prune_models.py``). The live ``champion.*``
+    files are never touched, and the champion's versioned pair is always kept
+    alongside the ``keep_last_n`` newest versions.
+
+    Args:
+        keep_last_n: Number of newest versioned pairs to keep (plus champion).
+        dry_run: Report candidates without deleting anything.
+
+    Returns:
+        Sorted version ids that were (or would be) removed.
+    """
+    champion_id: str | None = None
+    champion_meta = MODEL_DIR / "champion.json"
+    if champion_meta.exists():
+        try:
+            with open(champion_meta) as f:
+                champion_id = json.load(f).get("version_id")
+        except Exception as e:
+            logger.warning(f"Failed to read {champion_meta}: {e}")
+
+    versions = list_model_versions()
+    keep = {v.version_id for v in versions[: max(keep_last_n, 0)]}
+    if champion_id:
+        keep.add(champion_id)
+
+    removed = []
+    for version in versions:
+        if version.version_id in keep:
+            continue
+        removed.append(version.version_id)
+        if dry_run:
+            continue
+        for suffix in (".pkl", ".json"):
+            path = MODEL_DIR / f"{version.version_id}{suffix}"
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning(f"Failed to delete {path}: {e}")
+
+    if dry_run:
+        logger.info(f"Would prune {len(removed)} version(s): {sorted(removed)}")
+    else:
+        logger.info(f"Pruned {len(removed)} version(s): {sorted(removed)}")
+    return sorted(removed)

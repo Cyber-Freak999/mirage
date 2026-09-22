@@ -28,14 +28,14 @@ def build_config() -> RetrainingConfig:
     Falls back to honeypot-only (all-label-1) training with a loud warning
     when the public dataset dirs are absent — never silently.
     """
-    cicids_dir = DATA_ROOT / "raw" / "cicids2017"
-    unsw_dir = DATA_ROOT / "raw" / "unsw-nb15"
-    if not cicids_dir.exists():
-        logger.warning(f"CICIDS dir {cicids_dir} not found - skipping CICIDS2017")
-        cicids_dir = None
-    if not unsw_dir.exists():
-        logger.warning(f"UNSW dir {unsw_dir} not found - skipping UNSW-NB15")
-        unsw_dir = None
+    raw_cicids = DATA_ROOT / "raw" / "cicids2017"
+    raw_unsw = DATA_ROOT / "raw" / "unsw-nb15"
+    cicids_dir: Path | None = raw_cicids if raw_cicids.exists() else None
+    unsw_dir: Path | None = raw_unsw if raw_unsw.exists() else None
+    if cicids_dir is None:
+        logger.warning(f"CICIDS dir {raw_cicids} not found - skipping CICIDS2017")
+    if unsw_dir is None:
+        logger.warning(f"UNSW dir {raw_unsw} not found - skipping UNSW-NB15")
     if cicids_dir is None and unsw_dir is None:
         logger.warning("No public datasets found - retraining on honeypot-only all-label-1 data")
     return RetrainingConfig(

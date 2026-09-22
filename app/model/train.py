@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from ..retrain.champion_challenger import ChampionChallenger, create_validation_set
-from .ensemble import save_model, train_initial_model
+from .ensemble import train_initial_model
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             random_state=args.random_state,
             cicids_sample=args.cicids_sample,
             unsw_sample=args.unsw_sample,
+            overwrite=True,
         )
     except (FileNotFoundError, ValueError) as exc:
         logger.error(f"Could not load datasets: {exc}")
@@ -61,12 +62,12 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info(f"Training on {len(X_train)} samples ({y_train.sum()} attacks), validating on {len(X_val)}")
 
-    ensemble = train_initial_model(X_train, y_train, k_folds=args.k_folds)
+    ensemble = train_initial_model(X_train, y_train, k_folds=args.k_folds, random_state=args.random_state)
 
     result = ChampionChallenger().validate(ensemble, X_val=X_val, y_val=y_val)
-
+    assert ensemble.version is not None, "trained ensemble has no version metadata"
+    # NOTE: validate() already persists on promotion; no second save here.
     if result.promoted:
-        save_model(ensemble)
         try:
             from ..retrain.drift import DriftMonitor
             from ..schema.features import FEATURE_NAMES

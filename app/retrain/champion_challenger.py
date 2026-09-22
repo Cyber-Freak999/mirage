@@ -78,6 +78,7 @@ def create_validation_set(
     random_state: int = 42,
     cicids_sample: float = 1.0,
     unsw_sample: float = 1.0,
+    overwrite: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Create and persist a fixed held-out validation set.
 
@@ -86,6 +87,9 @@ def create_validation_set(
     ``(X_train, y_train, X_val, y_val)`` so training can use the same
     split without label leakage through the validation set.
 
+    The persisted set is the fixed gate all promotions are judged against;
+    it is never silently replaced — pass ``overwrite=True`` to regenerate.
+
     Args:
         cicids_dir: Directory containing CICIDS2017 CSV files.
         unsw_dir: Directory containing UNSW-NB15 CSV files.
@@ -93,11 +97,21 @@ def create_validation_set(
         random_state: Random seed for sampling and splitting.
         cicids_sample: Fraction of CICIDS2017 rows to load.
         unsw_sample: Fraction of UNSW-NB15 rows to load.
+        overwrite: Allow replacing an existing persisted validation set.
 
     Returns:
         Tuple of (X_train, y_train, X_val, y_val).
+
+    Raises:
+        FileExistsError: If the validation set exists and ``overwrite`` is false.
     """
     from sklearn.model_selection import train_test_split
+
+    if VALIDATION_SET_PATH.exists() and not overwrite:
+        raise FileExistsError(
+            f"Validation set {VALIDATION_SET_PATH} exists;"
+            " pass overwrite=True to regenerate (invalidates prior gate comparisons)"
+        )
 
     X, y = load_combined_datasets(cicids_dir, unsw_dir, cicids_sample, unsw_sample, random_state)
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y)
@@ -166,6 +180,7 @@ class ChampionChallenger:
         if X_val is None or y_val is None:
             X_val, y_val = load_validation_set()
 
+        assert challenger.version is not None, "challenger has no version metadata"
         logger.info(f"Validating challenger {challenger.version.version_id} on {len(X_val)} samples")
 
         if calibrate:
@@ -231,7 +246,7 @@ class ChampionChallenger:
         Promotion criteria: challenger must meet or beat champion on F1.
         Can be extended to require improvement on multiple metrics.
         """
-        return challenger["f1"] >= champion["f1"]
+        return bool(challenger["f1"] >= champion["f1"])
 
     def _log_validation(self, result: ValidationResult):
         """Log validation result to database."""
@@ -279,6 +294,7 @@ def run_full_retrain(
     k_folds: int = 5,
     cicids_sample: float = 1.0,
     unsw_sample: float = 1.0,
+    random_state: int = 42,
 ) -> tuple[StackingEnsemble, ValidationResult]:
     """Run full retraining pipeline: train challenger, validate, promote if better.
 
@@ -290,6 +306,7 @@ def run_full_retrain(
         k_folds: Stacking folds for the challenger.
         cicids_sample: Fraction of CICIDS2017 rows to load (cap for small hosts).
         unsw_sample: Fraction of UNSW-NB15 rows to load (cap for small hosts).
+        random_state: Seed for sampling, splitting, and training.
     """
     from ..model.ensemble import train_initial_model
 
@@ -303,7 +320,7 @@ def run_full_retrain(
 
     logger.info(f"Retraining on {len(X_combined)} total samples ({y_combined.sum()} attacks)")
 
-    challenger = train_initial_model(X_combined, y_combined, k_folds=k_folds)
+    challenger = train_initial_model(X_combined, y_combined, k_folds=k_folds, random_state=random_state)
 
     validator = ChampionChallenger()
     result = validator.validate(challenger)

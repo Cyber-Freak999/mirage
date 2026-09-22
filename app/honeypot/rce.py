@@ -56,7 +56,7 @@ def _resolve_path(path: str) -> str:
     global _current_dir
     if not path.startswith("/"):
         path = _current_dir + "/" + path
-    parts = []
+    parts: list[str] = []
     for part in path.split("/"):
         if part == "" or part == ".":
             continue

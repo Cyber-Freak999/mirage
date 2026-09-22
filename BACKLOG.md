@@ -1,6 +1,6 @@
 # BACKLOG: Mirage
 
-**Version:** 3.3 | **Last Updated:** 2026-09-22
+**Version:** 3.4 | **Last Updated:** 2026-09-22
 **Source:** product-spec.md, README.md, AGENTS.md, docs/superpowers/plans/2026-09-06-train-baseline-model.md, docs/superpowers/plans/2026-09-13-combined-baseline-training.md, full-stack code audit 2026-09-15 (`app/model/ensemble.py`, `app/retrain/*`, `app/schema/*`, `app/api/`, `app/honeypot/`, `dashboard/app.py`, `docker-compose.yml`, Dockerfiles, on-disk DB state)
 
 Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/monitor-only.
@@ -61,16 +61,16 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 ### Tier 4 -- Hygiene (Phase D)
 
 21. `[x]` **CI.** `infra` | `must` — `.github/workflows/ci.yml`: ruff check + format check + pytest on push/PR (Python 3.11 via uv). Verifies live on first push. Commit: `ci: add GitHub Actions quality gates`.
-22. `[ ]` **mypy.** `infra` | `should` — type hints already exist; add mypy config + dependency and get it green.
-23. `[ ]` **Model retention.** `infra` | `should` — `data/models/` grows ~26.5 MB per version, unbounded; spec §9 says never delete, so make pruning opt-in (keep champion + last N).
-24. `[ ]` **SQLite backups.** `infra` | `should` — `honeypot.db`/`validation.db`/`drift.db` are single files with no backup story; a simple `.backup` script/cron.
-25. `[ ]` **Docs & dead-code accuracy.** `docs`/`app` | `should` — README `uv run python -m app` is broken (no `app/__main__.py`, old #9); `requirements.txt` duplicates `pyproject.toml` (Dockerfile drift risk); remove or wire vestigial code: all-None `CICIDS_FEATURE_MAP`/`UNSW_FEATURE_MAP`, unused `DriftMonitor.reference_window`, never-written `feature_stats` table, always-0 `decoy_indicator`, double-save on promotion in `train.py`, `--random-state` flag not propagated to `train_initial_model`, `create_validation_set` silently overwriting the "fixed" validation npz, UNSW `DtypeWarning` (old #14).
+22. `[x]` **mypy.** `infra` | `should` — mypy 1.13.0 in dev deps (locked), `[tool.mypy]` config with overrides for stub-less third-party libs; 47 errors → 0, including real finds (`--random-state` now seeded through learners + folds, `None`-able review ids guarded, honest `| None` model types). CI runs mypy. Commits: `chore: add mypy config and get type checks green`, `ci: run mypy in quality gates`.
+23. `[x]` **Model retention.** `infra` | `should` — `prune_models(keep_last_n=3)` keeps champion + N newest versioned pairs (spec §9: strictly opt-in via `scripts/prune_models.py`, `--dry-run` supported, champion files never touched). Commit: `feat: opt-in model retention pruning`.
+24. `[x]` **SQLite backups.** `infra` | `should` — `scripts/backup_dbs.py` hot-copies the six known DBs via the backup API into timestamped sets (`--keep-last 7`, `--dry-run`); missing DBs skipped; cron documented in README. Commit: `feat: SQLite hot-backup script with pruning`.
+25. `[x]` **Docs & dead-code accuracy.** `docs`/`app` | `should` — removed all-None feature maps (~130 lines), `reference_window`, `feature_stats` table, always-0 `decoy_indicator` (schema, logging, dashboard, tests); fixed double-save on promotion, `--random-state` propagation, validation-overwrite guard (+ dashboard message), UNSW `DtypeWarning` (`dtype=str`, verified); `requirements.txt` marked generated (pins match `pyproject.toml`); README + AGENTS.md run commands fixed. Net −105 lines. Commit: `chore: remove dead code and fix stale docs`.
 
 ### Tier 5 -- Release gates
 
-26. `[ ]` **Add Apache-2.0 LICENSE** (full text) at repo root. `docs` | `must` — currently absent.
-27. `[~]` **Attribution / NOTICE.** `docs` | `must` — CICIDS2017 + UNSW-NB15 citations and the UNSW academic-use restriction verified present (README L100-101); decide whether a NOTICE file is needed and add it if so.
-28. `[ ]` **Tracking-docs fate + commit.** `infra` | `should` — decide whether `docs/superpowers/plans/*.md` remain repo artifacts; commit `BACKLOG.md` + `docs/` (or relocate) before release.
+26. `[x]` **Add Apache-2.0 LICENSE** (full text) at repo root. `docs` | `must` — `LICENSE` added (standard text, appendix boilerplate with project copyright).
+27. `[x]` **Attribution / NOTICE.** `docs` | `must` — decision: `NOTICE` file added (dataset attributions + license pointer); README citations (L121-122) kept as the long form. Dataset files themselves are never redistributed (git-ignored `data/raw/`).
+28. `[x]` **Tracking-docs fate + commit.** `infra` | `should` — decision: session plans under `docs/superpowers/` are working notes, excluded from the release via `.gitignore`; the curated record (`BACKLOG.md`, `docs/baseline-report.md`) stays tracked.
 29. `[ ]` **Final gates + flip public.** `infra` | `must` — re-run `uv run ruff check .` + `uv run pytest tests/`, confirm `git status` clean, then flip repo visibility. Includes the deferred VPS checklist from #19: one-time volume `chown` if migrating root-owned data, production `.env` (`MIRAGE_SECRET_KEY`/`MIRAGE_API_KEY`/`MIRAGE_ADMIN_KEY`, never dev defaults), full production-topology `compose up` with healthy healthchecks, retrainer enabled. Depends on Tier 3 completion.
 
 **Verified this pass (2026-09-13, still true 2026-09-15):** gitignore covers `data/`, `*.db*`, `*.npz`, `*.joblib`, `*.bin`, `.env`; secrets scan clean (no `.env`, no tracked key/secret patterns); quality gates green (ruff clean, 44 tests passed). Model versioning works end-to-end; deterministic re-runs produce byte-identical models.
