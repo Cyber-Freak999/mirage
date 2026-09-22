@@ -1,7 +1,11 @@
 """Flask API for real-time intrusion detection scoring."""
 
+import hmac
 import logging
+import os
 import time
+from functools import wraps
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
@@ -14,6 +18,60 @@ bp = Blueprint("api", __name__, url_prefix="/api")
 
 _model: StackingEnsemble = None
 _model_version: str = "unknown"
+
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DASHBOARD_DB = DATA_DIR / "dashboard.db"
+
+
+def log_score(score: float, prediction: int, model_version: str):
+    """Append one scoring event for the dashboard confidence trend.
+
+    Best-effort: logging failures are swallowed so scoring never breaks.
+    """
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(str(DASHBOARD_DB))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS score_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                score REAL NOT NULL,
+                prediction INTEGER NOT NULL,
+                model_version TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO score_log (timestamp, score, prediction, model_version) VALUES (?, ?, ?, ?)",
+            (time.time(), score, prediction, model_version),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.warning("Failed to log score event", exc_info=True)
+
+
+def require_api_key(view):
+    """Require a valid ``X-API-Key`` header for mutating endpoints.
+
+    Fails closed (503) when ``MIRAGE_API_KEY`` is not configured; 401 on
+    mismatch. Scoring and read-only endpoints stay public by design.
+    """
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        expected = os.environ.get("MIRAGE_API_KEY")
+        if not expected:
+            return jsonify({"error": "API key not configured"}), 503
+        provided = request.headers.get("X-API-Key", "")
+        if not hmac.compare_digest(provided, expected):
+            return jsonify({"error": "Invalid API key"}), 401
+        return view(*args, **kwargs)
+
+    return wrapper
 
 
 def get_model() -> StackingEnsemble:
@@ -78,6 +136,7 @@ def score():
 
         rf_score, xgb_score = model.get_base_predictions(features.reshape(1, -1))
 
+        log_score(score, prediction, _model_version)
         return jsonify(
             {
                 "score": score,
@@ -92,9 +151,9 @@ def score():
                 "timestamp": time.time(),
             }
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Scoring failed")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Scoring failed"}), 500
 
 
 @bp.route("/batch_score", methods=["POST"])
@@ -133,8 +192,9 @@ def batch_score():
                     "confidence": max(score, 1 - score),
                 }
             )
-        except Exception as e:
-            results.append({"error": str(e)})
+        except Exception:
+            logger.exception("Batch item scoring failed")
+            results.append({"error": "Scoring failed"})
 
     return jsonify(
         {
@@ -165,6 +225,7 @@ def model_info():
 
 
 @bp.route("/reviews/<int:review_id>/approve", methods=["POST"])
+@require_api_key
 def review_approve(review_id: int):
     """Approve a drift review, queueing it for retraining on the next sweep."""
     # TODO(Tier3): require API key auth.
@@ -180,6 +241,7 @@ def review_approve(review_id: int):
 
 
 @bp.route("/reviews/<int:review_id>/reject", methods=["POST"])
+@require_api_key
 def review_reject(review_id: int):
     """Reject a drift review, skipping retraining for that batch."""
     # TODO(Tier3): require API key auth.
@@ -195,6 +257,7 @@ def review_reject(review_id: int):
 
 
 @bp.route("/model/reload", methods=["POST"])
+@require_api_key
 def reload():
     """Reload the champion model (e.g., after retraining)."""
     try:
@@ -205,9 +268,9 @@ def reload():
                 "model_version": _model_version,
             }
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Model reload failed")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Model reload failed"}), 500
 
 
 @bp.route("/model/versions", methods=["GET"])

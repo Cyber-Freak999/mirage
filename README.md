@@ -69,6 +69,18 @@ This starts three isolated services — `honeypot-api`, `dashboard`, and `retrai
 uv run pytest tests/
 ```
 
+### Capture-data retention
+
+Raw attacker payloads (`raw_request`, `headers_json`) may contain PII and are
+purged after 30 days; structured fields and all training artifacts are kept:
+
+```bash
+uv run python scripts/purge_captures.py --days 30          # run the purge
+uv run python scripts/purge_captures.py --days 30 --dry-run  # report only
+```
+
+Run this on a schedule (e.g. host cron) wherever captures accumulate.
+
 ### Lint and format
 
 ```bash

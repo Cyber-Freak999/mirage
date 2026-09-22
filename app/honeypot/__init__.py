@@ -1,8 +1,10 @@
 """Honeypot endpoints — SQLi-style and RCE/upload-style entry points."""
 
 import json
+import os
 import sqlite3
 import time
+from collections import deque
 from pathlib import Path
 
 from flask import Flask
@@ -10,6 +12,20 @@ from flask import Flask
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "honeypot.db"
 
 MAX_HEADERS_BYTES = 4096
+MAX_TRACKED_IPS = 10_000
+RATE_LIMIT_WINDOW_SECONDS = 60.0
+
+_rate_hits: dict[str, deque[float]] = {}
+
+
+def reset_rate_limit():
+    """Clear all rate-limiter state (tests)."""
+    _rate_hits.clear()
+
+
+def _rate_limit() -> int:
+    """Per-minute request cap for honeypot endpoints (env `MIRAGE_RATE_LIMIT_PER_MIN`)."""
+    return int(os.environ.get("MIRAGE_RATE_LIMIT_PER_MIN", 60))
 
 
 def init_db():
@@ -112,4 +128,44 @@ def log_request(source_ip: str, capture: dict[str, str], attack_type: str):
     conn.close()
 
 
-__all__ = ["init_db", "register_blueprints", "capture_context", "log_request"]
+def register_rate_limit(app: Flask):
+    """Throttle honeypot endpoints per IP without dropping logs.
+
+    Runs as an ``after_request`` handler so the view (and its logging) always
+    executes first — spec section 13 requires all traffic to be logged
+    regardless of rate limiting. Over-limit responses are replaced with 429.
+
+    Note: counters are per-process memory, so multi-worker deployments
+    (gunicorn) enforce the limit approximately per worker.
+    """
+
+    @app.after_request
+    def _throttle(response):
+        from flask import request as flask_request
+
+        if flask_request.blueprint not in ("sqlii", "rce"):
+            return response
+        now = time.time()
+        ip = flask_request.remote_addr or "unknown"
+        hits = _rate_hits.get(ip)
+        if hits is None:
+            if len(_rate_hits) >= MAX_TRACKED_IPS:
+                _rate_hits.pop(next(iter(_rate_hits)))
+            hits = _rate_hits[ip] = deque()
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+        while hits and hits[0] <= cutoff:
+            hits.popleft()
+        hits.append(now)
+        if len(hits) > _rate_limit():
+            return app.response_class("Rate limit exceeded", status=429)
+        return response
+
+
+__all__ = [
+    "init_db",
+    "register_blueprints",
+    "capture_context",
+    "log_request",
+    "register_rate_limit",
+    "reset_rate_limit",
+]

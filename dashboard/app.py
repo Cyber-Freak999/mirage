@@ -1,17 +1,19 @@
 """Plotly Dash dashboard for Mirage Adaptive IDS."""
 
+import hmac
 import json
 import logging
+import os
 import sqlite3
 import time
+from pathlib import Path
 
 import dash
 import dash_bootstrap_components as dbc
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objs as go
-from dash import MATCH, Input, Output, callback_context, dcc, html
+from dash import MATCH, Input, Output, State, callback_context, dcc, html
 
 from app.honeypot import DB_PATH
 from app.model.ensemble import list_model_versions, load_model
@@ -22,6 +24,9 @@ from app.retrain.review_gate import ReviewGate
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DASHBOARD_DB = DATA_DIR / "dashboard.db"
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.DARKLY],
@@ -31,7 +36,37 @@ app = dash.Dash(
 
 server = app.server
 
+secret_key = os.environ.get("MIRAGE_SECRET_KEY")
+if not secret_key:
+    logger.warning("MIRAGE_SECRET_KEY not set - dashboard admin actions are disabled")
+    secret_key = "dev-only-insecure"
+server.secret_key = secret_key
+
 REFRESH_INTERVAL = 5000
+
+
+def check_admin_key(provided: str) -> bool:
+    """Check a dashboard admin password against ``MIRAGE_ADMIN_KEY``.
+
+    Fails closed: with no key configured, nothing unlocks.
+
+    Args:
+        provided: Password supplied by the operator.
+
+    Returns:
+        True on a match.
+    """
+    expected = os.environ.get("MIRAGE_ADMIN_KEY")
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
+def is_admin() -> bool:
+    """Return whether the current session passed the admin gate."""
+    from flask import session
+
+    return bool(session.get("mirage_admin"))
 
 
 def get_recent_attacks(limit: int = 50) -> list[dict]:
@@ -66,14 +101,33 @@ def get_recent_attacks(limit: int = 50) -> list[dict]:
 
 
 def get_confidence_history(hours: int = 24) -> pd.DataFrame:
-    """Get model confidence history (placeholder - would need separate logging)."""
-    return pd.DataFrame(
-        {
-            "timestamp": pd.date_range(end=pd.Timestamp.now(), periods=100, freq="15min"),
-            "confidence": np.random.uniform(0.5, 1.0, 100),
-            "prediction": np.random.choice([0, 1], 100, p=[0.3, 0.7]),
-        }
-    )
+    """Get model confidence history from logged ``/api/score`` events.
+
+    Args:
+        hours: Lookback window in hours.
+
+    Returns:
+        DataFrame with timestamp/confidence/prediction/model_version columns
+        (empty when nothing has been logged yet).
+    """
+    cutoff = time.time() - hours * 3600
+    try:
+        conn = sqlite3.connect(str(DASHBOARD_DB))
+        rows = conn.execute(
+            "SELECT timestamp, score, prediction, model_version FROM score_log"
+            " WHERE timestamp >= ? ORDER BY timestamp ASC",
+            (cutoff,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        logger.debug("No score log available yet")
+        return pd.DataFrame(columns=["timestamp", "confidence", "prediction", "model_version"])
+    if not rows:
+        return pd.DataFrame(columns=["timestamp", "confidence", "prediction", "model_version"])
+    df = pd.DataFrame(rows, columns=["timestamp", "score", "prediction", "model_version"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+    df["confidence"] = df["score"].clip(0.0, 1.0).apply(lambda s: max(s, 1 - s))
+    return df[["timestamp", "confidence", "prediction", "model_version"]]
 
 
 def get_drift_history() -> list[dict]:
@@ -225,6 +279,10 @@ def render_live_feed():
 def render_confidence():
     """Render model confidence trend panel."""
     df = get_confidence_history(24)
+    if df.empty:
+        return dbc.Alert(
+            "No scored requests logged yet — confidence trend appears after /api/score traffic", color="info"
+        )
 
     fig = go.Figure()
     fig.add_trace(
@@ -329,7 +387,6 @@ def render_retrain():
             html.Pre(json.dumps(r["psi_scores"], indent=2)),
         ]
         if r["status"] == "pending":
-            # TODO(Tier3): gate these behind admin auth (Tier 3 #18).
             card_body += [
                 dbc.Button(
                     "Approve",
@@ -521,6 +578,19 @@ def render_admin():
                                     dbc.CardHeader("System Actions"),
                                     dbc.CardBody(
                                         [
+                                            dbc.Input(
+                                                id="admin-key",
+                                                type="password",
+                                                placeholder="Admin key",
+                                                className="mb-2",
+                                            ),
+                                            dbc.Button(
+                                                "Unlock Admin",
+                                                id="btn-unlock",
+                                                color="secondary",
+                                                className="me-2 mb-2",
+                                            ),
+                                            html.Div(id="admin-unlock-output"),
                                             dbc.Button(
                                                 "Reload Model", id="btn-reload", color="primary", className="me-2"
                                             ),
@@ -546,12 +616,30 @@ def render_admin():
 
 
 @app.callback(
+    Output("admin-unlock-output", "children"),
+    Input("btn-unlock", "n_clicks"),
+    State("admin-key", "value"),
+    prevent_initial_call=True,
+)
+def unlock_admin(n_clicks, provided):
+    """Unlock admin actions for this session on a correct admin key."""
+    from flask import session
+
+    if check_admin_key(provided or ""):
+        session["mirage_admin"] = True
+        return dbc.Alert("Admin unlocked for this session", color="success")
+    return dbc.Alert("Wrong admin key", color="danger")
+
+
+@app.callback(
     Output("admin-output", "children"),
     [Input("btn-reload", "n_clicks"), Input("btn-drift-check", "n_clicks"), Input("btn-create-val", "n_clicks")],
     prevent_initial_call=True,
 )
 def admin_actions(reload_clicks, drift_clicks, val_clicks):
-    """Handle admin button clicks."""
+    """Handle admin button clicks (requires unlocked admin session)."""
+    if not is_admin():
+        return dbc.Alert("Admin locked — unlock with the admin key first", color="warning")
     ctx = callback_context
     if not ctx.triggered:
         return ""
@@ -618,7 +706,8 @@ def admin_actions(reload_clicks, drift_clicks, val_clicks):
 )
 def review_actions(approve_clicks, reject_clicks):
     """Handle review approve/reject clicks (decision takes effect on next sweep)."""
-    # TODO(Tier3): gate these behind admin auth (Tier 3 #18).
+    if not is_admin():
+        return dbc.Alert("Admin locked — unlock with the admin key first", color="warning")
     ctx = callback_context
     if not ctx.triggered:
         return ""
@@ -645,4 +734,7 @@ def review_actions(approve_clicks, reject_clicks):
 
 
 if __name__ == "__main__":
-    app.run_server(host="0.0.0.0", port=8050, debug=True)
+    debug = os.environ.get("DASH_DEBUG", "false").lower() == "true"
+    if debug:
+        logger.warning("Running dashboard with debug=True (development only)")
+    app.run_server(host="0.0.0.0", port=8050, debug=debug)

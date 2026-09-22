@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   honeypot-api:
     build:
@@ -13,6 +11,11 @@ services:
       - mirage-data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
+      # Override all three in production (dev defaults are insecure placeholders).
+      - MIRAGE_SECRET_KEY=${MIRAGE_SECRET_KEY:-dev-only-insecure}
+      - MIRAGE_API_KEY=${MIRAGE_API_KEY:-}
+      - MIRAGE_ADMIN_KEY=${MIRAGE_ADMIN_KEY:-}
+      - MIRAGE_RATE_LIMIT_PER_MIN=${MIRAGE_RATE_LIMIT_PER_MIN:-60}
     networks:
       - mirage-internal
     deploy:
@@ -42,6 +45,9 @@ services:
       - mirage-data:/app/data:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - MIRAGE_SECRET_KEY=${MIRAGE_SECRET_KEY:-dev-only-insecure}
+      - MIRAGE_ADMIN_KEY=${MIRAGE_ADMIN_KEY:-}
+      - DASH_DEBUG=${DASH_DEBUG:-false}
     networks:
       - mirage-internal
     deploy:
@@ -69,6 +75,11 @@ services:
       - mirage-data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
+      - MIRAGE_SECRET_KEY=${MIRAGE_SECRET_KEY:-dev-only-insecure}
+    # NOTE: 2G cap is why retraining sample caps exist (0.05/0.25 in
+    # RetrainingConfig). Do not raise the caps without raising this limit.
+    # Never start this service on the small dev host: a drift trigger could
+    # launch a multi-GB retrain against the shared data volume.
     networks:
       - mirage-internal
     deploy:
@@ -91,6 +102,9 @@ volumes:
     driver: local
 
 networks:
+  # Single internal network by decision (BACKLOG #19): internal:true means no
+  # internet route (honeypot isolation control), and services share a volume
+  # rather than sockets, so splitting buys no containment.
   mirage-internal:
     driver: bridge
     internal: true

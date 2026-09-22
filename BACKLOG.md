@@ -1,6 +1,6 @@
 # BACKLOG: Mirage
 
-**Version:** 3.2 | **Last Updated:** 2026-09-21
+**Version:** 3.3 | **Last Updated:** 2026-09-22
 **Source:** product-spec.md, README.md, AGENTS.md, docs/superpowers/plans/2026-09-06-train-baseline-model.md, docs/superpowers/plans/2026-09-13-combined-baseline-training.md, full-stack code audit 2026-09-15 (`app/model/ensemble.py`, `app/retrain/*`, `app/schema/*`, `app/api/`, `app/honeypot/`, `dashboard/app.py`, `docker-compose.yml`, Dockerfiles, on-disk DB state)
 
 Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/monitor-only.
@@ -53,14 +53,14 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 
 > Audit context: zero auth/CORS/rate-limiting/request-size limits anywhere; `SECRET_KEY` never set; `python-dotenv` declared but never called; the dashboard runs the Dash dev server with `debug=True` in Docker; both Dockerfiles run as root; healthchecks call `curl`, which is not installed in either image. The honeypot itself is fully simulated (no subprocess/eval/file writes), so containment risk is low today — re-check if that changes.
 
-17. `[ ]` **API hardening.** `app` | `must` — API-key auth (finally use `python-dotenv`), `MAX_CONTENT_LENGTH`, stop returning raw exception strings (`api/__init__.py:97,137,180`), protect `/api/model/reload`, set `SECRET_KEY`.
-18. `[ ]` **Dashboard production mode.** `dashboard` | `must` — no `debug=True` in prod (`dashboard/app.py:613`); auth on admin actions (Reload Model, Trigger Drift Check, Create Validation Set, `:511-521`); replace the random-placeholder "Model Confidence" tab (`:68-76`) with real data.
-19. `[ ]` **Docker hardening.** `infra` | `must` — non-root `USER` in both Dockerfiles; replace curl-based healthchecks with a python one-liner (curl is not installed); consider splitting the single shared `mirage-internal` network so dashboard/api/honeypot/retrainer are not all mutually reachable; drop the obsolete compose `version:` key.
-20. `[ ]` **Capture-data retention policy.** `docs`/`infra` | `should` — attacker payloads may contain PII; define retention (e.g. purge `raw_request` after N days, keep aggregated features).
+17. `[x]` **API hardening.** `app` | `must` — `require_api_key` (fail-closed 503 unconfigured, 401 mismatch) on `/api/model/reload` + review endpoints; `SECRET_KEY`/`MAX_CONTENT_LENGTH` via dotenv in factory; generic error messages (no `str(e)` leaks); per-IP sliding-window limiter (60/min, env-tunable, logs-first per spec §13); `POST /api/score` logs to `score_log` for the confidence tab. Commit: `feat: harden API with key auth, limits, and error hygiene`.
+18. `[x]` **Dashboard production mode.** `dashboard` | `must` — `debug` from `DASH_DEBUG` (default off); session admin gate (`check_admin_key` vs `MIRAGE_ADMIN_KEY`, fail closed) guarding System Actions + review decisions; confidence tab reads real `score_log` with empty-state message (replaces `np.random` placeholder). Commit: `feat: dashboard production mode with admin gate and real confidence data`.
+19. `[x]` **Docker hardening.** `infra` | `must` — non-root `appuser` (UID 10000) in both images; python one-liner healthchecks (verified `healthy` in single-worker smoke test serving champion `v1789976193`); dropped `version:` key; env passthrough with dev defaults; kept single `internal: true` network with recorded rationale; `.dockerignore` added (images were ~10GB with venv/caches). Full production-topology run deferred to VPS per #29; retrainer never started on the small host. Commit: `fix: harden Docker images and compose`.
+20. `[x]` **Capture-data retention policy.** `docs`/`infra` | `should` — `scripts/purge_captures.py` (`--days`, `--dry-run`) nulls `raw_request`/`headers_json` past retention (default 30d), keeps structured columns; policy documented in README (host cron recommended); purged rows still convert via tested degraded path. Commit: `feat: capture-data retention policy and purge script`.
 
 ### Tier 4 -- Hygiene (Phase D)
 
-21. `[ ]` **CI.** `infra` | `must` — GitHub Actions workflow: ruff check + format + pytest on push/PR (`.github/` has no workflows; nothing runs tests today).
+21. `[x]` **CI.** `infra` | `must` — `.github/workflows/ci.yml`: ruff check + format check + pytest on push/PR (Python 3.11 via uv). Verifies live on first push. Commit: `ci: add GitHub Actions quality gates`.
 22. `[ ]` **mypy.** `infra` | `should` — type hints already exist; add mypy config + dependency and get it green.
 23. `[ ]` **Model retention.** `infra` | `should` — `data/models/` grows ~26.5 MB per version, unbounded; spec §9 says never delete, so make pruning opt-in (keep champion + last N).
 24. `[ ]` **SQLite backups.** `infra` | `should` — `honeypot.db`/`validation.db`/`drift.db` are single files with no backup story; a simple `.backup` script/cron.
@@ -71,7 +71,7 @@ Status: `[x]` done, `[ ]` not done, `[~]` partial, `[c]` blocked, `--` removed/m
 26. `[ ]` **Add Apache-2.0 LICENSE** (full text) at repo root. `docs` | `must` — currently absent.
 27. `[~]` **Attribution / NOTICE.** `docs` | `must` — CICIDS2017 + UNSW-NB15 citations and the UNSW academic-use restriction verified present (README L100-101); decide whether a NOTICE file is needed and add it if so.
 28. `[ ]` **Tracking-docs fate + commit.** `infra` | `should` — decide whether `docs/superpowers/plans/*.md` remain repo artifacts; commit `BACKLOG.md` + `docs/` (or relocate) before release.
-29. `[ ]` **Final gates + flip public.** `infra` | `must` — re-run `uv run ruff check .` + `uv run pytest tests/`, confirm `git status` clean, then flip repo visibility. Depends on Tier 3 completion.
+29. `[ ]` **Final gates + flip public.** `infra` | `must` — re-run `uv run ruff check .` + `uv run pytest tests/`, confirm `git status` clean, then flip repo visibility. Includes the deferred VPS checklist from #19: one-time volume `chown` if migrating root-owned data, production `.env` (`MIRAGE_SECRET_KEY`/`MIRAGE_API_KEY`/`MIRAGE_ADMIN_KEY`, never dev defaults), full production-topology `compose up` with healthy healthchecks, retrainer enabled. Depends on Tier 3 completion.
 
 **Verified this pass (2026-09-13, still true 2026-09-15):** gitignore covers `data/`, `*.db*`, `*.npz`, `*.joblib`, `*.bin`, `.env`; secrets scan clean (no `.env`, no tracked key/secret patterns); quality gates green (ruff clean, 44 tests passed). Model versioning works end-to-end; deterministic re-runs produce byte-identical models.
 

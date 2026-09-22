@@ -87,10 +87,13 @@ def test_sweep_processes_approved_review(isolated_dbs, tmp_path, monkeypatch) ->
     assert calls["n"] == 0  # honeypot DB empty; retrain ran on zero new rows
 
 
-def test_api_approve_reject_roundtrip(isolated_dbs) -> None:
+def test_api_approve_reject_roundtrip(isolated_dbs, monkeypatch) -> None:
     """Approve/reject endpoints: 200 once, 409 on re-decide, 404 unknown."""
     from app.api import bp
     from app.retrain.review_gate import ReviewGate
+
+    monkeypatch.setenv("MIRAGE_API_KEY", "test-key")
+    headers = {"X-API-Key": "test-key"}
 
     gate = ReviewGate()
     review = gate.create_review(drift_result_id=3, max_psi=0.4, psi_scores={}, sample_size=5, sample_data={})
@@ -99,11 +102,11 @@ def test_api_approve_reject_roundtrip(isolated_dbs) -> None:
     app.register_blueprint(bp)
     client = app.test_client()
 
-    resp = client.post(f"/api/reviews/{review.id}/approve", json={"reviewer": "tester"})
+    resp = client.post(f"/api/reviews/{review.id}/approve", json={"reviewer": "tester"}, headers=headers)
     assert resp.status_code == 200
 
-    resp = client.post(f"/api/reviews/{review.id}/approve", json={"reviewer": "tester"})
+    resp = client.post(f"/api/reviews/{review.id}/approve", json={"reviewer": "tester"}, headers=headers)
     assert resp.status_code == 409
 
-    resp = client.post("/api/reviews/99999/reject", json={"reviewer": "tester"})
+    resp = client.post("/api/reviews/99999/reject", json={"reviewer": "tester"}, headers=headers)
     assert resp.status_code == 404

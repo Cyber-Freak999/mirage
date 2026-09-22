@@ -20,9 +20,16 @@ COPY . .
 
 RUN mkdir -p /app/data /app/data/models /app/data/reference
 
+# Run as non-root. The named volume inherits /app/data ownership on first
+# creation; pre-existing root-owned volumes need a one-time chown (see #29).
+RUN groupadd -r appuser --gid 10000 \
+    && useradd -r -g appuser --uid 10000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/api/health || exit 1
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/api/health', timeout=5).status==200 else 1)"
 
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "app:create_app()"]
